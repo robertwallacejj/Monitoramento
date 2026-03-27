@@ -1,4 +1,4 @@
-# Monitoramento de Entregas SP — Estrutura Profissional
+# Monitoramento de Entregas SP —
 
 Projeto reorganizado para uso local no navegador com foco em manutenção, clareza e evolução futura.
 
