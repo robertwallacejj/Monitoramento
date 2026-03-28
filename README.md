@@ -1,56 +1,49 @@
-# Monitoramento de Entregas SP —
+# Monitoramento de Entregas SP — Central Operacional
 
-Projeto reorganizado para uso local no navegador com foco em manutenção, clareza e evolução futura.
+Versão organizada com **menu inicial** e três módulos principais:
+- Dashboard
+- Insucessos
+- Acompanhamento Geral
 
 ## Estrutura
 
 ```text
-monitoramento-jt-profissional/
+monitoramento-suite-menu-profissional/
 ├── assets/
 │   ├── css/
+│   │   ├── style.css
+│   │   ├── insucessos.css
+│   │   └── acompanhamento-geral.css
 │   ├── img/
 │   └── js/
 │       ├── core/
 │       └── modules/
 ├── docs/
 ├── pages/
+│   ├── dashboard.html
+│   ├── insucessos.html
+│   └── acompanhamento-geral.html
 ├── tools/
 ├── index.html
 └── README.md
 ```
 
-## Melhorias aplicadas
+## Como navegar
 
-- Estrutura em pastas por responsabilidade.
-- Correção da navegação entre Dashboard e Insucessos.
-- Separação do CSS específico de insucessos.
-- Botão para limpar dados locais em ambas as páginas.
-- Verificação de dependências externas ao carregar a página.
-- Head, caminhos e scripts reorganizados com `defer`.
-- Base pronta para futura migração para app web com backend.
+- `index.html`: menu inicial do projeto.
+- `pages/dashboard.html`: monitoramento principal por base.
+- `pages/insucessos.html`: consolidação de insucessos.
+- `pages/acompanhamento-geral.html`: leitura do arquivo executivo único.
 
-## Como abrir
+## Como publicar no Vercel
 
-### Opção 1 — abrir direto no navegador
-Abra `index.html`.
+1. Suba **todo o conteúdo da pasta** para o repositório.
+2. Garanta que o `index.html` fique na raiz do projeto.
+3. Faça commit e push.
+4. O Vercel deve abrir primeiro o menu inicial.
 
-### Opção 2 — recomendado
-Execute o servidor local incluído em `tools/start-local-server.bat`.
+## Observações
 
-Isso reduz problemas de clipboard, CORS e comportamento inconsistente do `file://`.
-
-## Dependências externas
-
-Atualmente o projeto continua usando CDN para:
-- XLSX
-- Chart.js
-- html2canvas
-
-Se quiser a próxima etapa ideal é empacotar essas libs localmente em `vendor/`.
-
-## Próximos passos recomendados
-
-1. Externalizar regras de negócio fixas para um arquivo de configuração.
-2. Unificar parsing de datas e cabeçalhos em uma camada central.
-3. Adicionar relatório de auditoria da importação.
-4. Migrar para versão web com autenticação e banco quando quiser subir isso online.
+- O projeto continua usando CDN para `XLSX`, `Chart.js` e `html2canvas`.
+- Para evitar problemas de navegador ao testar localmente, prefira o servidor local em `tools/`.
+- As páginas internas têm botão de **Menu inicial** para retorno rápido.

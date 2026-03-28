@@ -347,7 +347,7 @@
       '</div>',
 
       '<div class="header-center-logo">',
-     '<img src="./assets/img/logo-monitoramento.png" alt="Logo Monitoramento" class="header-logo-image">',
+      '<img src="./logo-monitoramento.png" alt="Logo Monitoramento" class="header-logo-image">',
       '</div>',
 
       '<div class="header-right">',

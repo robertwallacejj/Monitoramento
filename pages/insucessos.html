@@ -10,24 +10,33 @@
 
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script defer src="../assets/js/core/config.js"></script>
+  <script defer src="../assets/js/core/runtime.js"></script>
 
-  </head>
+</head>
 <body data-page="insucessos">
   <header class="topbar">
     <div class="topbar-left">
       <img src="../assets/img/logo-monitoramento.png" alt="Logo Monitoramento" class="brand-logo-img" />
       <div>
         <h1 class="page-title">INSUCESSOS</h1>
-        <p class="page-subtitle">Consolidação semanal de insucessos por base, data, motivo e motorista</p>
+
+<div class="tabs">
+  <a href="./dashboard.html" class="tab-btn">Dashboard</a>
+  <a href="./insucessos.html" class="tab-btn active">Insucessos</a>
+  <a href="./acompanhamento-geral.html" class="tab-btn">Acompanhamento Geral</a>
+</div>
+
+<p class="page-subtitle">Consolidação semanal de insucessos por base, data, motivo e motorista</p>
+        <div class="header-quick-links"><a href="../index.html" class="btn-secondary header-home-link">Menu inicial</a></div>
       </div>
     </div>
 
     <div class="topbar-right">
-    <button id="clearDataBtn" class="btn-secondary btn-danger-soft" type="button">Limpar dados locais</button>
-    <a href="../index.html" class="btn-secondary">Voltar ao Monitoramento</a>
-    <button id="importBtn" class="btn-primary" type="button">Importar Excels</button>
-    <input type="file" id="excelFiles" accept=".xlsx,.xls" multiple hidden />
-</div>
+      <button id="clearDataBtn" class="btn-secondary btn-danger-soft" type="button">Limpar dados locais</button>
+      <button id="importBtn" class="btn-primary" type="button">Importar Excels</button>
+      <input type="file" id="excelFiles" accept=".xlsx,.xls" multiple hidden />
+    </div>
   </header>
 
   <main class="container">
