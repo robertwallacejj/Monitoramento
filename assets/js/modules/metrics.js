@@ -236,7 +236,7 @@
         "ETC TRANSFACIL EXPRESS",
         "TRANSFACIL EXPRESS"
       ])) {
-        return withGroup("TRANFACIL");
+        return withGroup("TRANSFACIL");
       }
       return base;
     }
@@ -256,7 +256,7 @@
         "TRANFACIL",
         "TRANFÁCIL"
       ])) {
-        return withGroup("TRANFACIL");
+        return withGroup("TRANSFACIL");
       }
 
       return base;
@@ -299,7 +299,7 @@
         containsNormalized(driver, "TRANSFÁCIL EXPRESS") ||
         containsNormalized(driver, "TRANFÁCIL EXPRESS")
       ) {
-        return withGroup("TRANFACIL");
+        return withGroup("TRANSFACIL");
       }
 
       if (startsWithAnyNormalized(driver, [
@@ -334,7 +334,7 @@
         "ETC TRANFACIL",
         "ETC TRANFÁCIL"
       ])) {
-        return withGroup("TRANFACIL");
+        return withGroup("TRANSFACIL");
       }
 
       if (startsWithAnyNormalized(driver, [
@@ -372,7 +372,7 @@
         "ETC TRANSFACIL",
         "ETC TRANSFÁCIL"
       ])) {
-        return withGroup("TRANFACIL");
+        return withGroup("TRANSFACIL");
       }
 
       if (startsWithAnyNormalized(driver, [
