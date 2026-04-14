@@ -1,703 +1,830 @@
 (function () {
   "use strict";
 
-  const U = window.CTUtils;
-  const Store = window.CTReportStore;
-  const PlotlyLib = window.Plotly;
+  const U = window.CTUtils || {};
+  const Store = window.CTReportStore || {};
+  const Metrics = window.CTMetrics || {};
 
   const state = {
-    allItems: [],
-    items: [],
+    allSources: [],
+    filteredSources: [],
     selectedIds: [],
-    openedId: null,
-    comparisonModel: null
+    filters: {
+      search: "",
+      base: "all"
+    },
+    chartMetric: "sla",
+    sortMode: "worst"
   };
 
-  function byId(id) {
-    return U.byId(id);
+  function toArray(value) {
+    return Array.isArray(value) ? value : [];
   }
 
-  function formatInputDate(value) {
-    if (!value) return "";
-    const d = new Date(value);
-    if (Number.isNaN(d.getTime())) return "";
-    const pad = function (n) { return String(n).padStart(2, "0"); };
-    return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) + "T" + pad(d.getHours()) + ":" + pad(d.getMinutes());
+  function clone(value) {
+    return JSON.parse(JSON.stringify(value));
   }
 
-  function parseDateTimeInput(id) {
-    const el = byId(id);
-    if (!el || !el.value) return null;
-    const d = new Date(el.value);
-    return Number.isNaN(d.getTime()) ? null : d.toISOString();
+  function normalizeText(value) {
+    return U.normalizar ? U.normalizar(value) : String(value || "").toUpperCase();
   }
 
-  function getSlaToneClass(value) {
-    const num = Number(value || 0);
-    if (num >= 95) return "success";
-    if (num >= 90) return "warning";
-    return "danger";
+  function formatDate(value) {
+    return U.formatDateTimeBR ? U.formatDateTimeBR(value) : String(value || "--");
   }
 
-  function getSlaLabel(value) {
-    const tone = getSlaToneClass(value);
-    if (tone === "success") return "Dentro da meta";
-    if (tone === "warning") return "Faixa de atenção";
-    return "Crítico";
+  function formatNumber(value) {
+    return U.formatNumber ? U.formatNumber(value) : String(Number(value || 0));
   }
 
-  function getSlaCardClass(value) {
-    return "tone-" + getSlaToneClass(value) + "-card";
+  function formatPercent(value, digits) {
+    return U.formatPercent ? U.formatPercent(value || 0, digits == null ? 2 : digits) : `${Number(value || 0).toFixed(digits == null ? 2 : digits)}%`;
   }
 
-  function diffClass(value, inverse) {
-    const num = Number(value || 0);
-    if (num === 0) return "neutral";
-    const good = inverse ? num < 0 : num > 0;
-    return good ? "positive" : "negative";
+  function escapeHtml(value) {
+    return U.escapeHtml ? U.escapeHtml(value) : String(value || "");
   }
 
-  function formatSigned(value, formatter) {
-    const num = Number(value || 0);
-    const text = formatter ? formatter(Math.abs(num)) : U.formatNumber(Math.abs(num));
-    return (num > 0 ? "+" : num < 0 ? "-" : "") + text;
+  function getSlaColor(slaValue) {
+    const sla = Number(slaValue || 0);
+    if (sla >= 95) return { color: "#16a34a", label: "Ótimo", class: "sla-green" };
+    if (sla >= 90) return { color: "#f59e0b", label: "Atenção", class: "sla-yellow" };
+    return { color: "#dc2626", label: "Crítico", class: "sla-red" };
   }
 
-  function sortBySavedAtDesc(list) {
-    return (list || []).slice().sort(function (a, b) {
-      return String(b.savedAt || "").localeCompare(String(a.savedAt || ""));
+  function getSlaStatusClass(slaValue) {
+    const sla = Number(slaValue || 0);
+    if (sla >= 95) return "sla-status-green";
+    if (sla >= 90) return "sla-status-yellow";
+    return "sla-status-red";
+  }
+
+  function extractSourceLabel(fileName) {
+    const baseName = String(fileName || "").replace(/\.[^/.]+$/, "");
+    return baseName.split("(")[0].trim() || baseName;
+  }
+
+  function buildSourceDisplayName(baseMetrics, fallbackLabel, fallbackFileName) {
+    const bases = toArray(baseMetrics).map(function (item) { return String(item.base || "").trim(); }).filter(Boolean);
+    const uniqueBases = Array.from(new Set(bases));
+    if (uniqueBases.length === 1) return uniqueBases[0];
+    if (uniqueBases.length === 2) return uniqueBases.join(" • ");
+    if (uniqueBases.length > 2) return `${uniqueBases[0]} +${uniqueBases.length - 1} bases`;
+    return fallbackLabel || extractSourceLabel(fallbackFileName) || "Período monitorado";
+  }
+
+  function safeId(text) {
+    return String(text || "item").replace(/[^a-z0-9_-]+/gi, "-");
+  }
+
+  function showMessage(message, type) {
+    if (U.showMessage) U.showMessage("reportsMessage", message, type || "info");
+  }
+
+  function clearMessage() {
+    if (U.clearMessage) U.clearMessage("reportsMessage");
+  }
+
+  function computeBaseMetricsFromRows(rows) {
+    if (Metrics.aggregateBaseMetrics) return Metrics.aggregateBaseMetrics(rows || []);
+    return [];
+  }
+
+  function computeDriversFromRows(rows) {
+    if (!Metrics.aggregateDrivers) return [];
+    return Metrics.aggregateDrivers(rows || []).filter(function (item) {
+      return item.base && item.driver;
     });
   }
 
-  function getFilters() {
+  function buildGlobalSummary(baseMetrics) {
+    const list = toArray(baseMetrics);
+    const totalBases = list.length;
+    const totalExpedido = list.reduce((sum, item) => sum + Number(item.total || 0), 0);
+    const totalEntregue = list.reduce((sum, item) => sum + Number(item.entregue || 0), 0);
+    const totalInsucesso = list.reduce((sum, item) => sum + Number(item.insucesso || 0), 0);
+    const totalPendente = list.reduce((sum, item) => sum + Number(item.pendente || 0) + Number(item.naoEntregue || 0), 0);
+    const deliveryRate = totalExpedido ? (totalEntregue / totalExpedido) * 100 : 0;
     return {
-      start: parseDateTimeInput("startDateTime"),
-      end: parseDateTimeInput("endDateTime"),
-      base: byId("reportBaseFilter") ? byId("reportBaseFilter").value : "all",
-      search: byId("reportSearch") ? byId("reportSearch").value.trim() : ""
+      totalBases,
+      totalExpedido,
+      totalEntregue,
+      totalInsucesso,
+      totalPendente,
+      deliveryRate
     };
   }
 
-  function getMetricForBase(snapshot, base) {
-    if (!snapshot || !base || base === "all") return null;
-    return (snapshot.baseMetrics || []).find(function (item) { return item.base === base; }) || null;
+  function aggregateBaseMetrics(items) {
+    const grouped = {};
+    toArray(items).forEach(function (item) {
+      toArray(item.baseMetrics).forEach(function (metric) {
+        const key = metric.base || "BASE INDEFINIDA";
+        if (!grouped[key]) {
+          grouped[key] = {
+            base: key,
+            regional: metric.regional || (Metrics.getRegionalFromBase ? Metrics.getRegionalFromBase(key) : "Não definida"),
+            total: 0,
+            entregue: 0,
+            insucesso: 0,
+            pendente: 0,
+            naoEntregue: 0,
+            taxa: 0
+          };
+        }
+        grouped[key].total += Number(metric.total || 0);
+        grouped[key].entregue += Number(metric.entregue || 0);
+        grouped[key].insucesso += Number(metric.insucesso || 0);
+        grouped[key].pendente += Number(metric.pendente || 0);
+        grouped[key].naoEntregue += Number(metric.naoEntregue || 0);
+      });
+    });
+    return Object.values(grouped).map(function (item) {
+      item.taxa = item.total ? (item.entregue / item.total) * 100 : 0;
+      return item;
+    }).sort(function (a, b) {
+      return (a.base || "").localeCompare(b.base || "", "pt-BR");
+    });
   }
 
-  function getSnapshotStats(snapshot, baseFilter) {
-    if (!snapshot) {
-      return {
-        totalBases: 0,
-        totalExpedido: 0,
-        totalEntregue: 0,
-        totalPendente: 0,
-        totalInsucesso: 0,
-        deliveryRate: 0
-      };
-    }
+  function aggregateDrivers(items) {
+    const grouped = {};
+    toArray(items).forEach(function (item) {
+      toArray(item.drivers).forEach(function (driver) {
+        const key = [driver.base || "", driver.driver || ""].join("::");
+        if (!grouped[key]) {
+          grouped[key] = {
+            base: driver.base || "",
+            driver: driver.driver || "",
+            total: 0,
+            entregue: 0,
+            insucesso: 0,
+            pendente: 0,
+            taxa: 0
+          };
+        }
+        grouped[key].total += Number(driver.total || 0);
+        grouped[key].entregue += Number(driver.entregue || 0);
+        grouped[key].insucesso += Number(driver.insucesso || 0);
+        grouped[key].pendente += Number(driver.pendente || 0);
+      });
+    });
+    return Object.values(grouped).map(function (item) {
+      item.taxa = item.total ? (item.entregue / item.total) * 100 : 0;
+      return item;
+    });
+  }
 
-    if (!baseFilter || baseFilter === "all") {
-      return Object.assign({
-        totalBases: Number(snapshot.summary && snapshot.summary.totalBases || 0),
-        totalExpedido: 0,
-        totalEntregue: 0,
-        totalPendente: 0,
-        totalInsucesso: 0,
-        deliveryRate: 0
-      }, snapshot.summary || {});
-    }
+  function buildSourceFromSnapshot(snapshot, fileItem, index) {
+    const rows = toArray(fileItem && fileItem.rows);
+    const baseMetrics = rows.length
+      ? computeBaseMetricsFromRows(rows)
+      : clone(toArray(fileItem && fileItem.baseMetrics).length ? fileItem.baseMetrics : snapshot.baseMetrics || []);
+    const drivers = rows.length
+      ? computeDriversFromRows(rows)
+      : clone(toArray(fileItem && fileItem.drivers).length ? fileItem.drivers : snapshot.drivers || []);
+    const summary = Object.assign(
+      buildGlobalSummary(baseMetrics),
+      clone(fileItem && fileItem.summary ? fileItem.summary : snapshot.summary || {})
+    );
+    summary.totalBases = Number(summary.totalBases || baseMetrics.length || 0);
+    summary.totalExpedido = Number(summary.totalExpedido || 0);
+    summary.totalEntregue = Number(summary.totalEntregue || 0);
+    summary.totalInsucesso = Number(summary.totalInsucesso || 0);
+    summary.totalPendente = Number(summary.totalPendente || 0);
+    summary.deliveryRate = summary.totalExpedido ? (summary.totalEntregue / summary.totalExpedido) * 100 : Number(summary.deliveryRate || 0);
 
-    const metric = getMetricForBase(snapshot, baseFilter);
-    if (!metric) {
-      return {
-        totalBases: 0,
-        totalExpedido: 0,
-        totalEntregue: 0,
-        totalPendente: 0,
-        totalInsucesso: 0,
-        deliveryRate: 0
-      };
-    }
+    const fileName = fileItem && fileItem.fileName ? fileItem.fileName : snapshot.fileNames && snapshot.fileNames[0] ? snapshot.fileNames[0] : `Lote ${index + 1}`;
+    const chipNames = toArray(snapshot.fileNames).length ? snapshot.fileNames : [fileName];
+    const shortLabel = buildSourceDisplayName(baseMetrics, extractSourceLabel(fileName), fileName);
 
     return {
-      totalBases: 1,
-      totalExpedido: Number(metric.total || 0),
-      totalEntregue: Number(metric.entregue || 0),
-      totalPendente: Number(metric.pendente || 0) + Number(metric.naoEntregue || 0),
-      totalInsucesso: Number(metric.insucesso || 0),
-      deliveryRate: Number(metric.taxa || 0)
+      id: `${snapshot.id || safeId(snapshot.savedAt)}::${safeId(fileName)}::${index}`,
+      snapshotId: snapshot.id,
+      savedAt: fileItem && fileItem.savedAt ? fileItem.savedAt : snapshot.savedAt,
+      lastUpdate: snapshot.lastUpdate || snapshot.savedAt,
+      label: shortLabel,
+      fileName: fileName,
+      selectedSheetName: fileItem && fileItem.selectedSheetName ? fileItem.selectedSheetName : "",
+      rowCount: Number(fileItem && fileItem.rowCount || snapshot.rowCount || 0),
+      fileCount: Number(fileItem ? 1 : snapshot.fileCount || chipNames.length || 1),
+      fileNames: fileItem ? [fileName] : chipNames,
+      summary: summary,
+      baseMetrics: baseMetrics,
+      drivers: drivers
     };
   }
 
-  function getBases(snapshot) {
-    return (snapshot && snapshot.baseMetrics ? snapshot.baseMetrics : []).slice();
-  }
-
-  function getBestBase(snapshot) {
-    return getBases(snapshot).slice().sort(function (a, b) {
-      if ((b.taxa || 0) !== (a.taxa || 0)) return (b.taxa || 0) - (a.taxa || 0);
-      return (b.total || 0) - (a.total || 0);
-    })[0] || null;
-  }
-
-  function getWorstBase(snapshot) {
-    return getBases(snapshot).slice().sort(function (a, b) {
-      if ((a.taxa || 0) !== (b.taxa || 0)) return (a.taxa || 0) - (b.taxa || 0);
-      return (b.insucesso || 0) - (a.insucesso || 0);
-    })[0] || null;
-  }
-
-  function getWorstDriver(snapshot) {
-    return (snapshot && snapshot.drivers ? snapshot.drivers : []).slice().sort(function (a, b) {
-      if ((a.taxa || 0) !== (b.taxa || 0)) return (a.taxa || 0) - (b.taxa || 0);
-      return (b.total || 0) - (a.total || 0);
-    })[0] || null;
-  }
-
-  function updateHeaderBadges(items) {
-    U.setText("reportsCountBadge", "Snapshots: " + U.formatNumber(items.length));
-    U.setText("reportsLastBadge", items[0] ? ("Último snapshot: " + U.formatDateTimeBR(items[0].savedAt)) : "Último snapshot: --");
-  }
-
-  function renderStats(items) {
-    const latest = items[0] || null;
-    const baseFilter = getFilters().base;
-    const maxTotal = items.reduce(function (acc, item) {
-      const total = Number(getSnapshotStats(item, baseFilter).totalExpedido || 0);
-      return total > acc ? total : acc;
-    }, 0);
-    const avgSla = items.length ? items.reduce(function (acc, item) {
-      return acc + Number(getSnapshotStats(item, baseFilter).deliveryRate || 0);
-    }, 0) / items.length : 0;
-
-    U.setText("statSnapshots", U.formatNumber(items.length));
-    U.setText("statLatestTime", latest ? U.formatDateTimeBR(latest.savedAt) : "--");
-    U.setText("statMaxTotal", U.formatNumber(maxTotal));
-    U.setText("statLatestBases", latest ? U.formatNumber(getSnapshotStats(latest, baseFilter).totalBases || 0) : "0");
-    U.setText("statAverageSla", U.formatPercent(avgSla, 2));
-  }
-
-  function populateBaseFilter(items) {
-    const select = byId("reportBaseFilter");
-    if (!select) return;
-    const current = select.value || "all";
-    const bases = Array.from(new Set(items.flatMap(function (item) {
-      return (item.baseMetrics || []).map(function (metric) { return metric.base; });
-    }).filter(Boolean))).sort(function (a, b) { return a.localeCompare(b, "pt-BR"); });
-
-    select.innerHTML = '<option value="all">Todas as bases</option>' + bases.map(function (base) {
-      return '<option value="' + U.escapeHtml(base) + '">' + U.escapeHtml(base) + '</option>';
-    }).join("");
-
-    if (bases.includes(current)) select.value = current;
-  }
-
-  function reportRowHtml(item) {
-    const summary = getSnapshotStats(item, getFilters().base);
-    const tone = getSlaToneClass(summary.deliveryRate);
-    const checked = state.selectedIds.includes(item.id) ? "checked" : "";
-    const opened = state.openedId === item.id ? "is-opened" : "";
-
-    return [
-      '<article class="report-row tone-' + tone + ' ' + opened + '" data-report-id="' + U.escapeHtml(item.id) + '">',
-      '<div class="report-row-check">',
-      '<label class="report-check-chip"><input type="checkbox" class="report-select" data-report-id="' + U.escapeHtml(item.id) + '" ' + checked + ' /></label>',
-      '<span>Comparar</span>',
-      '</div>',
-      '<div class="report-row-main">',
-      '<div class="report-row-title">' + U.escapeHtml(U.formatDateTimeBR(item.savedAt)) + '</div>',
-      '<div class="report-row-subtitle">' + U.formatNumber(item.fileCount || 0) + ' arquivo(s) • ' + U.formatNumber(item.rowCount || 0) + ' linha(s) • ' + U.formatNumber(summary.totalBases || 0) + ' base(s)</div>',
-      '<div class="report-row-meta">',
-      '<span class="report-pill">Expedido: ' + U.formatNumber(summary.totalExpedido || 0) + '</span>',
-      '<span class="report-pill">Entregues: ' + U.formatNumber(summary.totalEntregue || 0) + '</span>',
-      '<span class="report-pill">Insucesso: ' + U.formatNumber(summary.totalInsucesso || 0) + '</span>',
-      '<span class="report-pill sla-pill-' + tone + '">SLA: ' + U.formatPercent(summary.deliveryRate || 0, 2) + '</span>',
-      '</div>',
-      '</div>',
-      '<div class="report-row-actions">',
-      '<button class="btn-secondary report-open-btn" type="button" data-report-id="' + U.escapeHtml(item.id) + '">Abrir</button>',
-      '<button class="btn-secondary report-delete-btn" type="button" data-report-id="' + U.escapeHtml(item.id) + '">Excluir</button>',
-      '</div>',
-      '</article>'
-    ].join("");
-  }
-
-  function renderList(items) {
-    const list = byId("reportsList");
-    if (!list) return;
-    list.innerHTML = items.map(reportRowHtml).join("");
-    U.toggleHidden("reportsEmpty", items.length > 0);
-  }
-
-  function metricCardHtml(title, value, toneClass, subtitle) {
-    return [
-      '<article class="card summary-card report-summary-card ' + (toneClass || '') + '">',
-      '<h4>' + U.escapeHtml(title) + '</h4>',
-      '<strong>' + U.escapeHtml(value) + '</strong>',
-      subtitle ? '<span class="summary-caption">' + U.escapeHtml(subtitle) + '</span>' : '',
-      '</article>'
-    ].join("");
-  }
-
-  function basesTableHtml(bases) {
-    const rows = (bases || []).slice().sort(function (a, b) {
-      return (b.total || 0) - (a.total || 0);
-    }).map(function (item) {
-      return [
-        '<tr>',
-        '<td>' + U.escapeHtml(item.base || '-') + '</td>',
-        '<td>' + U.escapeHtml(item.regional || '-') + '</td>',
-        '<td class="t-right">' + U.formatNumber(item.total || 0) + '</td>',
-        '<td class="t-right">' + U.formatNumber(item.entregue || 0) + '</td>',
-        '<td class="t-right">' + U.formatNumber(item.insucesso || 0) + '</td>',
-        '<td class="t-right">' + U.formatNumber((item.pendente || 0) + (item.naoEntregue || 0)) + '</td>',
-        '<td class="t-right"><span class="hero-tag compact-tag sla-pill-' + getSlaToneClass(item.taxa || 0) + '">' + U.formatPercent(item.taxa || 0, 2) + '</span></td>',
-        '</tr>'
-      ].join("");
-    }).join("");
-
-    return [
-      '<div class="table-scroll report-table-scroll">',
-      '<table>',
-      '<thead><tr><th>Base</th><th>Regional</th><th class="t-right">Expedido</th><th class="t-right">Entregues</th><th class="t-right">Insucesso</th><th class="t-right">Pendências</th><th class="t-right">SLA</th></tr></thead>',
-      '<tbody>' + (rows || '<tr><td colspan="7" class="text-soft">Sem bases neste snapshot.</td></tr>') + '</tbody>',
-      '</table>',
-      '</div>'
-    ].join("");
-  }
-
-  function driversTableHtml(drivers) {
-    const rows = (drivers || []).slice().sort(function (a, b) {
-      if ((a.taxa || 0) !== (b.taxa || 0)) return (a.taxa || 0) - (b.taxa || 0);
-      return (b.total || 0) - (a.total || 0);
-    }).slice(0, 12).map(function (item) {
-      return [
-        '<tr>',
-        '<td>' + U.escapeHtml(item.driver || '-') + '</td>',
-        '<td>' + U.escapeHtml(item.base || '-') + '</td>',
-        '<td class="t-right">' + U.formatNumber(item.total || 0) + '</td>',
-        '<td class="t-right">' + U.formatNumber(item.insucesso || 0) + '</td>',
-        '<td class="t-right"><span class="hero-tag compact-tag sla-pill-' + getSlaToneClass(item.taxa || 0) + '">' + U.formatPercent(item.taxa || 0, 2) + '</span></td>',
-        '</tr>'
-      ].join("");
-    }).join("");
-
-    return [
-      '<div class="table-scroll report-table-scroll">',
-      '<table>',
-      '<thead><tr><th>Motorista</th><th>Base</th><th class="t-right">Total</th><th class="t-right">Insucesso</th><th class="t-right">SLA</th></tr></thead>',
-      '<tbody>' + (rows || '<tr><td colspan="5" class="text-soft">Sem motoristas para exibir.</td></tr>') + '</tbody>',
-      '</table>',
-      '</div>'
-    ].join("");
-  }
-
-  function buildReportSvg(snapshot) {
-    const summary = getSnapshotStats(snapshot, getFilters().base);
-    const best = getBestBase(snapshot);
-    const worst = getWorstBase(snapshot);
-    const driver = getWorstDriver(snapshot);
-    const tone = getSlaToneClass(summary.deliveryRate);
-    const fill = tone === "success" ? "#effaf2" : tone === "warning" ? "#fff7e8" : "#fff1f1";
-    const stroke = tone === "success" ? "#16a34a" : tone === "warning" ? "#f59e0b" : "#dc2626";
-
-    return [
-      '<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900">',
-      '<rect width="1600" height="900" fill="#eff3f8"/>',
-      '<rect x="36" y="36" width="1528" height="828" rx="28" fill="#ffffff" stroke="#dbe3ef"/>',
-      '<text x="70" y="104" font-size="44" font-family="Segoe UI, Arial" font-weight="700" fill="#24324b">Relatório salvo em ' + U.escapeHtml(U.formatDateTimeBR(snapshot.savedAt)) + '</text>',
-      '<text x="70" y="144" font-size="22" font-family="Segoe UI, Arial" fill="#6b7a90">' + U.escapeHtml(U.formatNumber(snapshot.fileCount || 0)) + ' arquivo(s) • ' + U.escapeHtml(U.formatNumber(snapshot.rowCount || 0)) + ' linha(s) • Referência ' + U.escapeHtml(snapshot.referenceDate || '-') + '</text>',
-      '<rect x="1275" y="68" width="230" height="48" rx="24" fill="#fff6f6" stroke="#f2c3c3"/>',
-      '<text x="1298" y="98" font-size="20" font-family="Segoe UI, Arial" font-weight="700" fill="#b91c1c">Assinatura: ' + U.escapeHtml(snapshot.signature || '-') + '</text>',
-      '<rect x="70" y="186" width="1460" height="88" rx="20" fill="' + fill + '" stroke="' + stroke + '"/>',
-      '<text x="96" y="238" font-size="32" font-family="Segoe UI, Arial" font-weight="700" fill="#24324b">Faixa operacional: ' + U.escapeHtml(getSlaLabel(summary.deliveryRate)) + '</text>',
-      '<text x="96" y="266" font-size="20" font-family="Segoe UI, Arial" fill="#54647d">SLA geral em ' + U.escapeHtml(U.formatPercent(summary.deliveryRate, 2)) + ' nesta captura</text>',
-      '<g>',
-      metricSvgBlock(70, 310, 'Total de bases', U.formatNumber(summary.totalBases || 0)),
-      metricSvgBlock(370, 310, 'Total expedido', U.formatNumber(summary.totalExpedido || 0)),
-      metricSvgBlock(670, 310, 'Entregues', U.formatNumber(summary.totalEntregue || 0)),
-      metricSvgBlock(970, 310, 'Pendências', U.formatNumber(summary.totalPendente || 0)),
-      metricSvgBlock(1270, 310, 'Insucesso', U.formatNumber(summary.totalInsucesso || 0)),
-      metricSvgBlock(70, 490, 'Taxa de entrega', U.formatPercent(summary.deliveryRate || 0, 2)),
-      metricSvgBlock(370, 490, 'Melhor base', best ? best.base : '-', best ? ('SLA ' + U.formatPercent(best.taxa || 0, 2)) : ''),
-      metricSvgBlock(670, 490, 'Base em atenção', worst ? worst.base : '-', worst ? ('SLA ' + U.formatPercent(worst.taxa || 0, 2)) : ''),
-      metricSvgBlock(970, 490, 'Motorista com menor SLA', driver ? driver.driver : '-', driver ? ('SLA ' + U.formatPercent(driver.taxa || 0, 2)) : ''),
-      metricSvgBlock(1270, 490, 'Arquivos do lote', U.formatNumber(snapshot.fileCount || 0), (snapshot.fileNames || [])[0] || ''),
-      '</g>',
-      '<text x="70" y="738" font-size="30" font-family="Segoe UI, Arial" font-weight="700" fill="#24324b">Top bases do snapshot</text>',
-      (snapshot.baseMetrics || []).slice().sort(function (a, b) { return (b.total || 0) - (a.total || 0); }).slice(0, 6).map(function (item, index) {
-        const y = 774 + (index * 18);
-        return '<text x="70" y="' + y + '" font-size="20" font-family="Segoe UI, Arial" fill="#4a5a73">• ' + U.escapeHtml(item.base || '-') + ' — SLA ' + U.escapeHtml(U.formatPercent(item.taxa || 0, 2)) + ' — Expedidos ' + U.escapeHtml(U.formatNumber(item.total || 0)) + '</text>';
-      }).join(''),
-      '</svg>'
-    ].join('');
-  }
-
-  function metricSvgBlock(x, y, label, value, subtitle) {
-    return [
-      '<rect x="' + x + '" y="' + y + '" width="260" height="136" rx="20" fill="#f8fbff" stroke="#dce6f2"/>',
-      '<text x="' + (x + 20) + '" y="' + (y + 36) + '" font-size="18" font-family="Segoe UI, Arial" font-weight="700" fill="#7a869b">' + U.escapeHtml(label) + '</text>',
-      '<text x="' + (x + 20) + '" y="' + (y + 88) + '" font-size="46" font-family="Segoe UI, Arial" font-weight="700" fill="#24324b">' + U.escapeHtml(value) + '</text>',
-      subtitle ? '<text x="' + (x + 20) + '" y="' + (y + 112) + '" font-size="18" font-family="Segoe UI, Arial" fill="#54647d">' + U.escapeHtml(subtitle) + '</text>' : ''
-    ].join('');
-  }
-
-  function renderReportViewer(snapshot) {
-    const shell = byId("reportViewer");
-    if (!shell || !snapshot) return;
-
-    const summary = getSnapshotStats(snapshot, getFilters().base);
-    const best = getBestBase(snapshot);
-    const worst = getWorstBase(snapshot);
-    const worstDriver = getWorstDriver(snapshot);
-
-    shell.className = "report-viewer-shell";
-    shell.innerHTML = [
-      '<section id="reportViewerExport" class="report-export-surface">',
-      '<div class="viewer-hero-row">',
-      '<div>',
-      '<h2 class="viewer-title">Relatório salvo em ' + U.escapeHtml(U.formatDateTimeBR(snapshot.savedAt)) + '</h2>',
-      '<div class="report-row-subtitle">' + U.formatNumber(snapshot.fileCount || 0) + ' arquivo(s) • ' + U.formatNumber(snapshot.rowCount || 0) + ' linha(s) • Referência ' + U.escapeHtml(snapshot.referenceDate || '-') + '</div>',
-      '</div>',
-      '<div class="viewer-top-actions">',
-      '<span class="report-pill">Assinatura: ' + U.escapeHtml(snapshot.signature || '-') + '</span>',
-      '<span class="report-pill sla-pill-' + getSlaToneClass(summary.deliveryRate) + '">' + getSlaLabel(summary.deliveryRate) + '</span>',
-      '</div>',
-      '</div>',
-      '<section class="summary-grid reports-summary-grid inline-summary-grid">',
-      metricCardHtml('Total de bases', U.formatNumber(summary.totalBases || 0), ''),
-      metricCardHtml('Total expedido', U.formatNumber(summary.totalExpedido || 0), ''),
-      metricCardHtml('Entregues', U.formatNumber(summary.totalEntregue || 0), ''),
-      metricCardHtml('Pendências', U.formatNumber(summary.totalPendente || 0), ''),
-      metricCardHtml('Insucesso', U.formatNumber(summary.totalInsucesso || 0), ''),
-      metricCardHtml('Taxa de entrega', U.formatPercent(summary.deliveryRate || 0, 2), getSlaCardClass(summary.deliveryRate), getSlaLabel(summary.deliveryRate)),
-      '</section>',
-      '<section class="report-insights-grid">',
-      '<article class="report-insight ' + getSlaCardClass(summary.deliveryRate) + '"><small>Faixa operacional</small><strong>' + U.escapeHtml(getSlaLabel(summary.deliveryRate)) + '</strong><span>SLA geral em ' + U.escapeHtml(U.formatPercent(summary.deliveryRate || 0, 2)) + ' nesta captura.</span></article>',
-      '<article class="report-insight"><small>Melhor base</small><strong>' + U.escapeHtml(best ? best.base : '-') + '</strong><span>' + (best ? ('SLA ' + U.formatPercent(best.taxa || 0, 2) + ' • ' + U.formatNumber(best.total || 0) + ' expedidos') : 'Sem base para exibir') + '</span></article>',
-      '<article class="report-insight"><small>Base em atenção</small><strong>' + U.escapeHtml(worst ? worst.base : '-') + '</strong><span>' + (worst ? ('SLA ' + U.formatPercent(worst.taxa || 0, 2) + ' • ' + U.formatNumber(worst.insucesso || 0) + ' insucessos') : 'Sem base crítica nesta captura') + '</span></article>',
-      '<article class="report-insight"><small>Motorista com menor SLA</small><strong>' + U.escapeHtml(worstDriver ? worstDriver.driver : '-') + '</strong><span>' + (worstDriver ? (U.escapeHtml(worstDriver.base || '-') + ' • SLA ' + U.formatPercent(worstDriver.taxa || 0, 2)) : 'Sem ranking de motoristas') + '</span></article>',
-      '<article class="report-insight"><small>Arquivos do lote</small><strong>' + U.escapeHtml(U.formatNumber(snapshot.fileCount || 0)) + '</strong><span>' + U.escapeHtml((snapshot.fileNames || [])[0] || 'Nenhum arquivo registrado') + '</span></article>',
-      '<article class="report-insight"><small>Assinatura do snapshot</small><strong>' + U.escapeHtml(snapshot.signature || '-') + '</strong><span>Identificador único para evitar duplicidade do lote.</span></article>',
-      '</section>',
-      '<section class="reports-viewer-grid">',
-      '<article class="card report-inner-card"><div class="section-header"><h3>Bases do snapshot</h3><span class="text-soft">Classificação por volume</span></div>' + basesTableHtml(snapshot.baseMetrics || []) + '</article>',
-      '<article class="card report-inner-card"><div class="section-header"><h3>Motoristas com menor SLA</h3><span class="text-soft">Top 12 em atenção</span></div>' + driversTableHtml(snapshot.drivers || []) + '</article>',
-      '</section>',
-      '<article class="card report-inner-card"><div class="section-header"><h3>Arquivos processados</h3><span class="text-soft">Lote salvo no histórico local</span></div><div class="report-files-box">' + (snapshot.fileNames || []).map(function (file) {
-        return '<div class="report-file-item">' + U.escapeHtml(file) + '</div>';
-      }).join('') + '</div></article>',
-      '</section>'
-    ].join("");
-  }
-
-  async function openSnapshot(id) {
-    const snapshot = await Store.getSnapshotById(id);
-    if (!snapshot) {
-      U.showMessage("reportsMessage", "Não foi possível abrir o snapshot selecionado.", "warning");
-      return;
-    }
-    state.openedId = id;
-    renderList(state.items);
-    renderReportViewer(snapshot);
-  }
-
-  function getWindowSnapshots(startIso, endIso) {
-    const start = startIso ? new Date(startIso).getTime() : null;
-    const end = endIso ? new Date(endIso).getTime() : null;
-    return sortBySavedAtDesc(state.allItems.filter(function (item) {
-      const when = new Date(item.savedAt).getTime();
-      if (start && when < start) return false;
-      if (end && when > end) return false;
-      const base = getFilters().base;
-      if (base !== "all") return Boolean(getMetricForBase(item, base));
-      return true;
-    })).reverse();
-  }
-
-  function buildPeriodModel(label, snapshots) {
-    const representative = snapshots[snapshots.length - 1] || null;
-    const first = snapshots[0] || representative;
-    const last = representative;
-    const firstStats = getSnapshotStats(first, getFilters().base);
-    const lastStats = getSnapshotStats(last, getFilters().base);
-    return {
-      label: label,
-      snapshots: snapshots,
-      representative: representative,
-      first: first,
-      last: last,
-      stats: lastStats,
-      changeInsideWindow: {
-        totalExpedido: Number(lastStats.totalExpedido || 0) - Number(firstStats.totalExpedido || 0),
-        totalEntregue: Number(lastStats.totalEntregue || 0) - Number(firstStats.totalEntregue || 0),
-        totalPendente: Number(lastStats.totalPendente || 0) - Number(firstStats.totalPendente || 0),
-        totalInsucesso: Number(lastStats.totalInsucesso || 0) - Number(firstStats.totalInsucesso || 0),
-        deliveryRate: Number(lastStats.deliveryRate || 0) - Number(firstStats.deliveryRate || 0)
+  function flattenSnapshotsToSources(snapshots) {
+    const list = [];
+    toArray(snapshots).forEach(function (snapshot) {
+      const fileItems = toArray(snapshot.fileItems);
+      if (fileItems.length) {
+        fileItems.forEach(function (item, index) {
+          list.push(buildSourceFromSnapshot(snapshot, item, index));
+        });
+      } else {
+        list.push(buildSourceFromSnapshot(snapshot, null, 0));
       }
-    };
-  }
-
-  function buildDiffRows(snapshotA, snapshotB) {
-    const baseFilter = getFilters().base;
-    const onlyChanged = byId("compareChangedOnly") ? byId("compareChangedOnly").checked : true;
-
-    const basesA = baseFilter === "all" ? (snapshotA.baseMetrics || []) : [getMetricForBase(snapshotA, baseFilter)].filter(Boolean);
-    const basesB = baseFilter === "all" ? (snapshotB.baseMetrics || []) : [getMetricForBase(snapshotB, baseFilter)].filter(Boolean);
-    const baseNames = Array.from(new Set([].concat(basesA.map(function (x) { return x.base; }), basesB.map(function (x) { return x.base; })))).sort(function (a, b) { return a.localeCompare(b, "pt-BR"); });
-
-    return baseNames.map(function (baseName) {
-      const a = basesA.find(function (item) { return item.base === baseName; }) || {};
-      const b = basesB.find(function (item) { return item.base === baseName; }) || {};
-      const delta = {
-        total: Number(b.total || 0) - Number(a.total || 0),
-        entregue: Number(b.entregue || 0) - Number(a.entregue || 0),
-        insucesso: Number(b.insucesso || 0) - Number(a.insucesso || 0),
-        pendente: (Number(b.pendente || 0) + Number(b.naoEntregue || 0)) - (Number(a.pendente || 0) + Number(a.naoEntregue || 0)),
-        taxa: Number(b.taxa || 0) - Number(a.taxa || 0)
-      };
-      const changedKeys = Object.keys(delta).filter(function (key) { return Number(delta[key] || 0) !== 0; });
-      return {
-        base: baseName,
-        regional: b.regional || a.regional || '-',
-        a: a,
-        b: b,
-        delta: delta,
-        changedKeys: changedKeys,
-        onlyBaixas: changedKeys.length > 0 && changedKeys.every(function (key) { return key === 'entregue' || key === 'pendente'; })
-      };
-    }).filter(function (row) {
-      return onlyChanged ? row.changedKeys.length > 0 : true;
+    });
+    return list.sort(function (a, b) {
+      return String(a.savedAt || "").localeCompare(String(b.savedAt || ""));
     });
   }
 
-  function buildComparisonModel(title, labelA, labelB, snapshotA, snapshotB, meta) {
-    const statsA = getSnapshotStats(snapshotA, getFilters().base);
-    const statsB = getSnapshotStats(snapshotB, getFilters().base);
-    const deltas = {
-      totalExpedido: Number(statsB.totalExpedido || 0) - Number(statsA.totalExpedido || 0),
-      totalEntregue: Number(statsB.totalEntregue || 0) - Number(statsA.totalEntregue || 0),
-      totalPendente: Number(statsB.totalPendente || 0) - Number(statsA.totalPendente || 0),
-      totalInsucesso: Number(statsB.totalInsucesso || 0) - Number(statsA.totalInsucesso || 0),
-      deliveryRate: Number(statsB.deliveryRate || 0) - Number(statsA.deliveryRate || 0)
-    };
-    const rows = buildDiffRows(snapshotA, snapshotB);
-    const relevantHighlights = [];
-
-    if (deltas.totalEntregue !== 0 && deltas.totalInsucesso === 0 && deltas.deliveryRate === 0) {
-      relevantHighlights.push('A principal mudança foi no volume de baixas/entregas.');
-    }
-    if (deltas.totalInsucesso !== 0) {
-      relevantHighlights.push('Houve alteração nos insucessos entre os períodos.');
-    }
-    if (deltas.deliveryRate !== 0) {
-      relevantHighlights.push('O SLA mudou entre os períodos analisados.');
-    }
-    if (!relevantHighlights.length) {
-      relevantHighlights.push('Os períodos estão muito parecidos; quase não houve mudança operacional relevante.');
-    }
-
-    return {
-      title: title,
-      labelA: labelA,
-      labelB: labelB,
-      snapshotA: snapshotA,
-      snapshotB: snapshotB,
-      statsA: statsA,
-      statsB: statsB,
-      deltas: deltas,
-      rows: rows,
-      highlights: relevantHighlights,
-      meta: meta || {}
-    };
+  async function loadSources() {
+    const snapshots = await (Store.listSnapshots ? Store.listSnapshots() : Promise.resolve([]));
+    state.allSources = flattenSnapshotsToSources(snapshots);
+    applyFilters(true);
+    updateSnapshotBadges();
   }
 
-  function deltaCardHtml(title, valueA, valueB, delta, type, inverse) {
-    const formatter = type === 'percent'
-      ? function (v) { return U.formatPercent(v, 2); }
-      : function (v) { return U.formatNumber(v); };
-    const deltaText = formatSigned(delta, formatter);
-    return [
-      '<article class="card summary-card comparison-metric-card">',
-      '<h4>' + U.escapeHtml(title) + '</h4>',
-      '<div class="comparison-values"><span>' + U.escapeHtml(valueA) + '</span><span>→</span><span>' + U.escapeHtml(valueB) + '</span></div>',
-      '<strong class="comparison-delta ' + diffClass(delta, inverse) + '">' + U.escapeHtml(deltaText) + '</strong>',
-      '</article>'
-    ].join('');
+  function sourceMatchesFilters(source) {
+    const search = normalizeText(state.filters.search || "");
+    const base = state.filters.base || "all";
+    const haystack = normalizeText([
+      source.label,
+      source.fileName,
+      source.selectedSheetName,
+      toArray(source.fileNames).join(" "),
+      formatDate(source.savedAt)
+    ].join(" "));
+    const matchesSearch = !search || haystack.includes(search) || toArray(source.baseMetrics).some(function (metric) {
+      return normalizeText(metric.base).includes(search);
+    });
+    const matchesBase = base === "all" || toArray(source.baseMetrics).some(function (metric) {
+      return metric.base === base;
+    });
+    return matchesSearch && matchesBase;
   }
 
-  function diffTableHtml(rows) {
-    const body = rows.map(function (row) {
+  function applyFilters(preserveSelection) {
+    state.filteredSources = state.allSources.slice();
+
+    if (!state.selectedIds.length && state.filteredSources.length) {
+      state.selectedIds = state.filteredSources.map(function (item) { return item.id; });
+    }
+
+    if (preserveSelection) {
+      const visibleIds = new Set(state.filteredSources.map(function (item) { return item.id; }));
+      state.selectedIds = state.selectedIds.filter(function (id) { return visibleIds.has(id); });
+      if (!state.selectedIds.length && state.filteredSources.length) {
+        state.selectedIds = state.filteredSources.map(function (item) { return item.id; });
+      }
+    }
+
+    renderSourceList();
+    renderDashboard();
+  }
+
+  function getSelectedSources() {
+    const selectedSet = new Set(state.selectedIds);
+    const selected = state.allSources.filter(function (item) {
+      return selectedSet.has(item.id);
+    });
+    if (!selected.length) return [];
+    return selected.sort(function (a, b) {
+      return String(a.savedAt || "").localeCompare(String(b.savedAt || ""));
+    });
+  }
+
+  function updateSnapshotBadges() {
+    U.setText("snapshotCountBadge", `${formatNumber(state.allSources.length)} relatório(s)`);
+    U.setText("topSelectedCount", `${formatNumber(state.selectedIds.length)} selecionado(s)`);
+  }
+
+  function toggleSelection(id, checked) {
+    const current = new Set(state.selectedIds);
+    if (checked) current.add(id); else current.delete(id);
+    state.selectedIds = Array.from(current);
+    renderSourceList();
+    renderDashboard();
+  }
+
+  function renderSourceList() {
+    const list = U.byId("snapshotsList");
+    const empty = U.byId("reportsEmpty");
+    const badge = U.byId("topSelectedCount");
+    const subtitle = U.byId("sourcesSubtitle");
+    if (!list) return;
+
+    U.toggleHidden(empty, state.filteredSources.length !== 0);
+    if (badge) badge.textContent = `${formatNumber(state.selectedIds.length)} selecionado(s)`;
+
+    list.innerHTML = state.filteredSources.map(function (source, index) {
+      const checked = state.selectedIds.includes(source.id);
+      const performance = Number(source.summary.deliveryRate || 0);
+      const bases = toArray(source.baseMetrics);
+      const baseNames = bases.slice(0, 2).map(function (b) { return b.base; }).join(", ");
+      const moreBases = bases.length > 2 ? ` +${bases.length - 2}` : "";
+      
+      // Create operational label - prefer base names over file names
+      const operationalLabel = buildSourceDisplayName(bases, source.label, source.fileName);
+      
       return [
-        '<tr class="' + (row.onlyBaixas ? 'row-focus-low' : 'row-focus-high') + '">',
-        '<td><strong>' + U.escapeHtml(row.base || '-') + '</strong><div class="cell-subtitle">' + U.escapeHtml(row.regional || '-') + '</div></td>',
-        '<td class="t-right">' + U.formatNumber(row.a.total || 0) + '</td>',
-        '<td class="t-right">' + U.formatNumber(row.b.total || 0) + '</td>',
-        '<td class="t-right comparison-delta ' + diffClass(row.delta.entregue, false) + '">' + formatSigned(row.delta.entregue, function (v) { return U.formatNumber(v); }) + '</td>',
-        '<td class="t-right comparison-delta ' + diffClass(row.delta.insucesso, true) + '">' + formatSigned(row.delta.insucesso, function (v) { return U.formatNumber(v); }) + '</td>',
-        '<td class="t-right comparison-delta ' + diffClass(row.delta.pendente, true) + '">' + formatSigned(row.delta.pendente, function (v) { return U.formatNumber(v); }) + '</td>',
-        '<td class="t-right comparison-delta ' + diffClass(row.delta.taxa, false) + '">' + formatSigned(row.delta.taxa, function (v) { return U.formatPercent(v, 2); }) + '</td>',
-        '<td><span class="report-pill ' + (row.onlyBaixas ? 'pill-soft-info' : 'pill-soft-danger') + '">' + (row.onlyBaixas ? 'Mudou sobretudo em baixas' : 'Mudança multi-KPI') + '</span></td>',
-        '</tr>'
+        `<article class="report-source-card${checked ? ' is-selected' : ''}" data-source-id="${escapeHtml(source.id)}">`,
+        '<div class="report-source-head">',
+        `<input class="report-source-check" type="checkbox" data-source-checkbox="${escapeHtml(source.id)}" ${checked ? 'checked' : ''} />`,
+        '<div style="flex:1">',
+        `<div class="report-source-title">${escapeHtml(operationalLabel)}</div>`,
+        `<div class="text-soft" style="margin-top:4px; font-size:11px">${escapeHtml(formatDate(source.savedAt))}</div>`,
+        '</div></div>',
+        '<div class="report-source-meta">',
+        `<span class="report-source-chip">${formatNumber(source.rowCount)} linhas</span>`,
+        `<span class="report-source-chip">${formatNumber(source.summary.totalBases || 0)} base(s)</span>`,
+        `<span class="report-source-chip sla-${getSlaColor(performance).class.split('-')[2]}">${formatPercent(performance, 1)}</span>`,
+        '</div>',
+        '</article>'
       ].join('');
     }).join('');
 
-    return [
-      '<div class="table-scroll comparison-table-scroll">',
-      '<table>',
-      '<thead><tr><th>Base</th><th class="t-right">Exp. A</th><th class="t-right">Exp. B</th><th class="t-right">Δ Entregues</th><th class="t-right">Δ Insucesso</th><th class="t-right">Δ Pendências</th><th class="t-right">Δ SLA</th><th>Sinal</th></tr></thead>',
-      '<tbody>' + (body || '<tr><td colspan="8" class="text-soft">Nenhuma base alterada para os filtros atuais.</td></tr>') + '</tbody>',
-      '</table>',
+    // Update sources subtitle with base names
+    if (subtitle && state.filteredSources.length > 0) {
+      const allBases = [];
+      state.filteredSources.forEach(function (source) {
+        const bases = toArray(source.baseMetrics);
+        bases.forEach(function (base) {
+          if (!allBases.includes(base.base)) {
+            allBases.push(base.base);
+          }
+        });
+      });
+      
+      if (allBases.length > 0) {
+        const baseDisplay = allBases.slice(0, 3).join(", ");
+        const moreCount = allBases.length > 3 ? ` +${allBases.length - 3}` : "";
+        subtitle.textContent = baseDisplay + moreCount;
+      } else {
+        subtitle.textContent = "Análise consolidada desses períodos";
+      }
+    }
+
+    updateSnapshotBadges();
+  }
+
+  function buildAggregatedModel(selectedSources) {
+    const baseMetrics = aggregateBaseMetrics(selectedSources);
+    const drivers = aggregateDrivers(selectedSources);
+    const summary = buildGlobalSummary(baseMetrics);
+    const timeline = selectedSources.map(function (source, index) {
+      return {
+        label: source.label || buildSourceDisplayName(source.baseMetrics, `Etapa ${index + 1}`, source.fileName),
+        savedAt: source.savedAt,
+        total: Number(source.summary.totalExpedido || 0),
+        entregue: Number(source.summary.totalEntregue || 0),
+        insucesso: Number(source.summary.totalInsucesso || 0),
+        pendente: Number(source.summary.totalPendente || 0),
+        sla: Number(source.summary.deliveryRate || 0)
+      };
+    });
+    return {
+      sources: selectedSources,
+      baseMetrics: baseMetrics,
+      drivers: drivers,
+      summary: summary,
+      timeline: timeline,
+      latestUpdate: selectedSources.length ? selectedSources[selectedSources.length - 1].savedAt : null
+    };
+  }
+
+  function renderSummary(model) {
+    const summary = model.summary;
+    const bases = model.baseMetrics.slice();
+    const best = bases.slice().sort(function (a, b) { return b.taxa - a.taxa; })[0];
+    const worst = bases.slice().sort(function (a, b) { return a.taxa - b.taxa; })[0];
+    const slaInfo = getSlaColor(summary.deliveryRate);
+
+    // Create operational labels
+    let executiveSubtitle = "Análise consolidada de períodos selecionados";
+    if (model.sources.length === 1) {
+      executiveSubtitle = `1 período analisado • ${summary.totalBases} base(s)`;
+    } else if (model.sources.length > 1) {
+      executiveSubtitle = `${model.sources.length} períodos consolidados • ${summary.totalBases} base(s) em análise`;
+    }
+
+    U.setText("executiveSubtitle", executiveSubtitle);
+
+    // Update KPI cards
+    U.setText("statSelectedSources", formatNumber(model.sources.length));
+    U.setText("statSelectedRows", `${formatNumber(model.sources.length)} período(s) selecionado(s)`);
+    U.setText("statTotalBases", formatNumber(summary.totalBases));
+    U.setText("statBasesLabel", summary.totalBases === 1 ? "base na análise" : "bases na análise");
+    U.setText("statTotalExpedido", formatNumber(summary.totalExpedido));
+    U.setText("statExpedidoLabel", "total de itens");
+    U.setText("statTotalEntregue", formatNumber(summary.totalEntregue));
+    U.setText("statDeliveredRate", formatPercent(summary.deliveryRate, 2));
+    U.setText("statTotalInsucesso", formatNumber(summary.totalInsucesso));
+    U.setText("statPendenteTotal", `${formatNumber(summary.totalPendente)} pendência(s)`);
+    U.setText("statSlaConsolidado", formatPercent(summary.deliveryRate, 1));
+    U.setText("statSlaStatus", slaInfo.label);
+
+    // Apply SLA status to main KPI card
+    const slaCard = document.querySelector(".reports-kpi-card.kpi-featured");
+    if (slaCard) {
+      slaCard.className = `reports-kpi-card kpi-featured ${slaInfo.class}`;
+    }
+
+    // Update best/worst performers
+    U.setText("bestBaseName", best ? best.base : "--");
+    U.setText("bestBaseMeta", best ? `${formatNumber(best.entregue)} entregas • SLA ${formatPercent(best.taxa, 1)}` : "--");
+    U.setText("worstBaseName", worst ? worst.base : "--");
+    U.setText("worstBaseMeta", worst ? `${formatNumber(worst.insucesso)} insucessos • SLA ${formatPercent(worst.taxa, 1)}` : "--");
+  }
+
+  function renderInsights(model) {
+    const container = U.byId("topInsights");
+    if (!container) return;
+    const bases = model.baseMetrics.slice();
+    const worst = bases.slice().sort(function (a, b) {
+      if (b.insucesso !== a.insucesso) return b.insucesso - a.insucesso;
+      return a.taxa - b.taxa;
+    })[0];
+    const best = bases.slice().sort(function (a, b) {
+      if (a.insucesso !== b.insucesso) return a.insucesso - b.insucesso;
+      return b.taxa - a.taxa;
+    })[0];
+    let deltaTitle = "Selecione pelo menos 2 fontes.";
+    let deltaSub = "Sem comparação de etapas ainda.";
+    if (model.sources.length >= 2) {
+      const compare = buildComparisonRows(model.sources[0], model.sources[model.sources.length - 1]);
+      const biggest = compare.sort(function (a, b) {
+        return Math.abs(b.deltaInsucesso) - Math.abs(a.deltaInsucesso) || Math.abs(b.deltaSla) - Math.abs(a.deltaSla);
+      })[0];
+      if (biggest) {
+        deltaTitle = biggest.base;
+        deltaSub = `${signed(biggest.deltaInsucesso)} insucessos • ${signed(biggest.deltaSla, 1)} p.p. de SLA`;
+      }
+    }
+    container.innerHTML = [
+      `<article class="insight-card"><small>Maior ofensor</small><strong>${escapeHtml(worst ? worst.base : '--')}</strong><span>${worst ? `${formatNumber(worst.insucesso)} insucessos • SLA ${formatPercent(worst.taxa, 1)}` : 'Aguardando seleção.'}</span></article>`,
+      `<article class="insight-card"><small>Menor ofensor</small><strong>${escapeHtml(best ? best.base : '--')}</strong><span>${best ? `${formatNumber(best.insucesso)} insucessos • SLA ${formatPercent(best.taxa, 1)}` : 'Aguardando seleção.'}</span></article>`,
+      `<article class="insight-card"><small>Maior mudança</small><strong>${escapeHtml(deltaTitle)}</strong><span>${escapeHtml(deltaSub)}</span></article>`
+    ].join("");
+  }
+
+  function renderCriticalAlerts(model) {
+    const container = U.byId("criticalAlerts");
+    if (!container) return;
+
+    const summary = model.summary;
+    const alerts = [];
+
+    // Alert 1: SLA below 90%
+    if (summary.deliveryRate < 90) {
+      alerts.push({
+        severity: "critical",
+        title: "SLA crítico",
+        description: `Taxa de entrega ${formatPercent(summary.deliveryRate, 1)} está abaixo do limite aceitável (90%).`,
+        action: "Revisar maiores ofensores"
+      });
+    }
+
+    // Alert 2: High failure rate
+    if (summary.totalExpedido > 0) {
+      const failureRate = (summary.totalInsucesso / summary.totalExpedido) * 100;
+      if (failureRate > 10) {
+        alerts.push({
+          severity: "warning",
+          title: "Taxa de insucessos elevada",
+          description: `${formatNumber(summary.totalInsucesso)} insucessos registrados (${formatPercent(failureRate, 1)}).`,
+          action: "Analisar padrões de falha"
+        });
+      }
+    }
+
+    // Alert 3: Multiple bases with poor SLA
+    const poorBases = model.baseMetrics.filter(function (b) { return b.taxa < 90; }).length;
+    if (poorBases > 2) {
+      alerts.push({
+        severity: "warning",
+        title: `${formatNumber(poorBases)} bases com SLA baixo`,
+        description: `${formatNumber(poorBases)} base(s) operando com SLA abaixo de 90%.`,
+        action: "Priorizar intervenção"
+      });
+    }
+
+    // Alert 4: High pending rate
+    if (summary.totalExpedido > 0) {
+      const pendingRate = (summary.totalPendente / summary.totalExpedido) * 100;
+      if (pendingRate > 15) {
+        alerts.push({
+          severity: "info",
+          title: "Volume de pendências",
+          description: `${formatNumber(summary.totalPendente)} itens pendentes (${formatPercent(pendingRate, 1)}).`,
+          action: "Acompanhar progresso"
+        });
+      }
+    }
+
+    if (alerts.length === 0) {
+      container.innerHTML = '<div class="alert-empty">✅ Nenhum alerta crítico detectado.</div>';
+      return;
+    }
+
+    container.innerHTML = alerts.map(function (alert) {
+      return [
+        `<div class="alert-item alert-${alert.severity}">`,
+        `<span class="alert-icon">${alert.severity === 'critical' ? '🔴' : alert.severity === 'warning' ? '🟡' : '🔵'}</span>`,
+        '<div class="alert-content">',
+        `<strong>${escapeHtml(alert.title)}</strong>`,
+        `<p>${escapeHtml(alert.description)}</p>`,
+        `<span class="alert-action">${escapeHtml(alert.action)}</span>`,
+        '</div></div>'
+      ].join('');
+    }).join('');
+  }
+
+  function getMetricValue(metric, kind) {
+    if (kind === "entregue") return Number(metric.entregue || 0);
+    if (kind === "insucesso") return Number(metric.insucesso || 0);
+    if (kind === "pendente") return Number(metric.pendente || 0) + Number(metric.naoEntregue || 0);
+    if (kind === "total") return Number(metric.total || 0);
+    return Number(metric.taxa || 0);
+  }
+
+  function getMetricLabel(kind) {
+    if (kind === "entregue") return "Entregues";
+    if (kind === "insucesso") return "Insucessos";
+    if (kind === "pendente") return "Pendências";
+    if (kind === "total") return "Total expedido";
+    return "SLA (%)";
+  }
+
+  function renderBaseChart(model) {
+    const el = U.byId("baseChart");
+    if (!el || !window.Plotly) return;
+    const list = model.baseMetrics.slice().sort(function (a, b) {
+      return b.taxa - a.taxa;
+    });
+    const x = list.map(function (item) { return item.base; });
+    const y = list.map(function (item) { return Number(item.taxa || 0); });
+    const text = list.map(function (item) {
+      return [
+        `<b>${escapeHtml(item.base)}</b>`,
+        `SLA: ${formatPercent(item.taxa, 1)}`,
+        `Entregues: ${formatNumber(item.entregue)}`,
+        `Insucessos: ${formatNumber(item.insucesso)}`
+      ].join("<br>");
+    });
+    Plotly.react(el, [{
+      type: "bar",
+      x: x,
+      y: y,
+      text: text,
+      hovertemplate: "%{text}<extra></extra>",
+      marker: { color: y, colorscale: "Reds" }
+    }], {
+      paper_bgcolor: "transparent",
+      plot_bgcolor: "transparent",
+      font: { color: "#3b4256" },
+      margin: { l: 50, r: 20, t: 20, b: 80 },
+      yaxis: { title: "SLA (%)", gridcolor: "rgba(148,163,184,0.18)" },
+      xaxis: { tickangle: -20 }
+    }, { responsive: true, displaylogo: false });
+  }
+
+  function renderStatusChart(model) {
+    const el = U.byId("statusChart");
+    if (!el || !window.Plotly) return;
+    const delivered = Number(model.summary.totalEntregue || 0);
+    const failures = Number(model.summary.totalInsucesso || 0);
+    const pending = Number(model.summary.totalPendente || 0);
+    Plotly.react(el, [{
+      type: "pie",
+      labels: ["Entregues", "Insucessos", "Pendências"],
+      values: [delivered, failures, pending],
+      hole: 0.45,
+      marker: { colors: ["#16a34a", "#dc2626", "#f59e0b"] },
+      textinfo: "label+percent",
+      hoverinfo: "label+value"
+    }], {
+      paper_bgcolor: "transparent",
+      plot_bgcolor: "transparent",
+      font: { color: "#3b4256" },
+      margin: { l: 20, r: 20, t: 20, b: 20 },
+      showlegend: false
+    }, { responsive: true, displaylogo: false });
+  }
+
+  function renderStageTimeline(model) {
+    const container = U.byId("stageTimeline");
+    if (!container) return;
+    if (model.timeline.length === 0) {
+      container.innerHTML = '<div class="empty-timeline">Selecione períodos para visualizar timeline</div>';
+      return;
+    }
+    container.innerHTML = model.timeline.map(function (item, index) {
+      const slaInfo = getSlaColor(item.sla);
+      return [
+        '<article class="stage-item">',
+        '<div class="stage-item-inner">',
+        `<h4>${index + 1}. ${escapeHtml(item.label)}</h4>`,
+        `<p class="stage-date">${escapeHtml(formatDate(item.savedAt))}</p>`,
+        '<div class="stage-tags">',
+        `<span class="stage-tag sla-${slaInfo.class.split('-')[2]}" style="background:${slaInfo.color}20;color:${slaInfo.color}">SLA ${formatPercent(item.sla, 1)}</span>`,
+        `<span class="stage-tag">${formatNumber(item.total)} expedidos</span>`,
+        `<span class="stage-tag">${formatNumber(item.entregue)} ✓ entregues</span>`,
+        `<span class="stage-tag error">${formatNumber(item.insucesso)} ✗ insucessos</span>`,
+        `<span class="stage-tag pending">${formatNumber(item.pendente)} ⏳ pendências</span>`,
+        '</div></div></article>'
+      ].join('');
+    }).join('');
+  }
+
+  function byBaseMap(source) {
+    const map = {};
+    toArray(source && source.baseMetrics).forEach(function (item) {
+      map[item.base] = item;
+    });
+    return map;
+  }
+
+  function signed(value, digits) {
+    const num = Number(value || 0);
+    const formatted = (digits == null ? num.toFixed(0) : num.toFixed(digits));
+    return `${num > 0 ? '+' : ''}${formatted}`;
+  }
+
+  function buildComparisonRows(first, last) {
+    const firstMap = byBaseMap(first);
+    const lastMap = byBaseMap(last);
+    const allBases = Array.from(new Set(Object.keys(firstMap).concat(Object.keys(lastMap))));
+    return allBases.map(function (base) {
+      const a = firstMap[base] || {};
+      const b = lastMap[base] || {};
+      return {
+        base: base,
+        slaA: Number(a.taxa || 0),
+        slaB: Number(b.taxa || 0),
+        deltaSla: Number(b.taxa || 0) - Number(a.taxa || 0),
+        entregueA: Number(a.entregue || 0),
+        entregueB: Number(b.entregue || 0),
+        deltaEntregue: Number(b.entregue || 0) - Number(a.entregue || 0),
+        insucessoA: Number(a.insucesso || 0),
+        insucessoB: Number(b.insucesso || 0),
+        deltaInsucesso: Number(b.insucesso || 0) - Number(a.insucesso || 0)
+      };
+    }).sort(function (a, b) {
+      return Math.abs(b.deltaInsucesso) - Math.abs(a.deltaInsucesso) || Math.abs(b.deltaSla) - Math.abs(a.deltaSla);
+    });
+  }
+
+  function deltaClass(value, reverse) {
+    if (value === 0) return "delta-neutral";
+    const positiveIsGood = reverse ? value < 0 : value > 0;
+    return positiveIsGood ? "delta-up" : "delta-down";
+  }
+
+  function renderComparisonChart(model) {
+    const el = U.byId("comparisonChart");
+    if (!el || !window.Plotly) return;
+    const labels = model.sources.map(function (source, index) { return `#${index + 1} ${escapeHtml(buildSourceDisplayName(source.baseMetrics, source.label, source.fileName))}`; });
+    const values = model.sources.map(function (source) { return Number(source.summary.deliveryRate || 0); });
+    Plotly.react(el, [{
+      type: "bar",
+      x: labels,
+      y: values,
+      marker: { color: values.map(function (value) { return value > 85 ? '#16a34a' : value > 65 ? '#f59e0b' : '#dc2626'; }) },
+      text: values.map(function (value) { return `${formatPercent(value, 1)}`; }),
+      textposition: 'auto'
+    }], {
+      paper_bgcolor: "transparent",
+      plot_bgcolor: "transparent",
+      font: { color: "#3b4256" },
+      margin: { l: 50, r: 20, t: 40, b: 110 },
+      yaxis: { title: "SLA (%)", range: [0, 100], gridcolor: "rgba(148,163,184,0.18)" },
+      xaxis: { tickangle: -20 }
+    }, { responsive: true, displaylogo: false });
+  }
+
+  function renderOffenders(model) {
+    const container = U.byId("offendersTable");
+    if (!container) return;
+    const worst = model.baseMetrics.slice().sort(function (a, b) {
+      if (b.insucesso !== a.insucesso) return b.insucesso - a.insucesso;
+      return a.taxa - b.taxa;
+    }).slice(0, 8);
+    const best = model.baseMetrics.slice().sort(function (a, b) {
+      if (a.insucesso !== b.insucesso) return a.insucesso - b.insucesso;
+      return b.taxa - a.taxa;
+    }).slice(0, 8);
+
+    container.innerHTML = [
+      '<div class="reports-rankings-row">',
+      '<div class="rankings-column">',
+      '<h4 class="rankings-subtitle">🔴 Maiores ofensores</h4>',
+      '<div class="reports-table-wrap-x"><table class="mega-table mega-table-compact"><thead><tr><th>Base</th><th class="t-right">Insucessos</th><th class="t-right">Pendências</th><th class="t-right">SLA</th></tr></thead><tbody>',
+      worst.map(function (item) {
+        const slaInfo = getSlaColor(item.taxa);
+        return `<tr><td><strong>${escapeHtml(item.base)}</strong></td><td class="t-right">${formatNumber(item.insucesso)}</td><td class="t-right">${formatNumber(Number(item.pendente || 0) + Number(item.naoEntregue || 0))}</td><td class="t-right ${slaInfo.class}"><strong>${formatPercent(item.taxa, 1)}</strong></td></tr>`;
+      }).join('') || '<tr><td colspan="4" class="t-center">Sem dados.</td></tr>',
+      '</tbody></table></div>',
+      '</div>',
+      '<div class="rankings-column">',
+      '<h4 class="rankings-subtitle">⭐ Melhor desempenho</h4>',
+      '<div class="reports-table-wrap-x"><table class="mega-table mega-table-compact"><thead><tr><th>Base</th><th class="t-right">Insucessos</th><th class="t-right">Pendências</th><th class="t-right">SLA</th></tr></thead><tbody>',
+      best.map(function (item) {
+        const slaInfo = getSlaColor(item.taxa);
+        return `<tr><td><strong>${escapeHtml(item.base)}</strong></td><td class="t-right">${formatNumber(item.insucesso)}</td><td class="t-right">${formatNumber(Number(item.pendente || 0) + Number(item.naoEntregue || 0))}</td><td class="t-right ${slaInfo.class}"><strong>${formatPercent(item.taxa, 1)}</strong></td></tr>`;
+      }).join('') || '<tr><td colspan="4" class="t-center">Sem dados.</td></tr>',
+      '</tbody></table></div>',
+      '</div>',
       '</div>'
     ].join('');
   }
 
-  function buildComparisonSvg(model) {
-    return [
-      '<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="960" viewBox="0 0 1600 960">',
-      '<rect width="1600" height="960" fill="#eff3f8"/>',
-      '<rect x="32" y="32" width="1536" height="896" rx="28" fill="#ffffff" stroke="#dbe3ef"/>',
-      '<text x="72" y="100" font-size="42" font-family="Segoe UI, Arial" font-weight="700" fill="#24324b">' + U.escapeHtml(model.title) + '</text>',
-      '<text x="72" y="138" font-size="22" font-family="Segoe UI, Arial" fill="#5b6b82">' + U.escapeHtml(model.labelA) + ' vs ' + U.escapeHtml(model.labelB) + '</text>',
-      comparisonMetricSvg(72, 182, 'Expedido', model.statsA.totalExpedido, model.statsB.totalExpedido, model.deltas.totalExpedido),
-      comparisonMetricSvg(392, 182, 'Entregues', model.statsA.totalEntregue, model.statsB.totalEntregue, model.deltas.totalEntregue),
-      comparisonMetricSvg(712, 182, 'Pendências', model.statsA.totalPendente, model.statsB.totalPendente, model.deltas.totalPendente),
-      comparisonMetricSvg(1032, 182, 'Insucesso', model.statsA.totalInsucesso, model.statsB.totalInsucesso, model.deltas.totalInsucesso),
-      comparisonMetricSvg(72, 382, 'SLA', U.formatPercent(model.statsA.deliveryRate, 2), U.formatPercent(model.statsB.deliveryRate, 2), formatSigned(model.deltas.deliveryRate, function (v) { return U.formatPercent(v, 2); })),
-      '<text x="72" y="620" font-size="30" font-family="Segoe UI, Arial" font-weight="700" fill="#24324b">Principais achados</text>',
-      model.highlights.map(function (text, index) {
-        return '<text x="72" y="' + (664 + index * 32) + '" font-size="22" font-family="Segoe UI, Arial" fill="#4a5a73">• ' + U.escapeHtml(text) + '</text>';
-      }).join(''),
-      '<text x="72" y="820" font-size="30" font-family="Segoe UI, Arial" font-weight="700" fill="#24324b">Bases alteradas: ' + U.escapeHtml(U.formatNumber(model.rows.length)) + '</text>',
-      '</svg>'
-    ].join('');
-  }
-
-  function comparisonMetricSvg(x, y, label, a, b, delta) {
-    const deltaValue = typeof delta === 'number' ? formatSigned(delta, function (v) { return U.formatNumber(v); }) : String(delta || '');
-    return [
-      '<rect x="' + x + '" y="' + y + '" width="280" height="150" rx="20" fill="#f8fbff" stroke="#dce6f2"/>',
-      '<text x="' + (x + 20) + '" y="' + (y + 34) + '" font-size="20" font-family="Segoe UI, Arial" font-weight="700" fill="#7a869b">' + U.escapeHtml(label) + '</text>',
-      '<text x="' + (x + 20) + '" y="' + (y + 84) + '" font-size="34" font-family="Segoe UI, Arial" font-weight="700" fill="#24324b">' + U.escapeHtml(String(a)) + ' → ' + U.escapeHtml(String(b)) + '</text>',
-      '<text x="' + (x + 20) + '" y="' + (y + 120) + '" font-size="22" font-family="Segoe UI, Arial" fill="#5b6b82">Δ ' + U.escapeHtml(deltaValue) + '</text>'
-    ].join('');
-  }
-
-  function renderComparison(model) {
-    state.comparisonModel = model;
-    const result = byId('comparisonResult');
-    const empty = byId('comparisonEmpty');
-    if (!result || !model) return;
-
-    empty.hidden = true;
-    result.hidden = false;
-    result.innerHTML = [
-      '<section id="comparisonExport" class="comparison-shell">',
-      '<div class="comparison-head">',
-      '<div>',
-      '<h2 class="viewer-title">' + U.escapeHtml(model.title) + '</h2>',
-      '<div class="report-row-subtitle">' + U.escapeHtml(model.labelA) + ' <strong>vs</strong> ' + U.escapeHtml(model.labelB) + '</div>',
-      '</div>',
-      '<div class="viewer-top-actions">',
-      '<span class="report-pill">Bases alteradas: ' + U.formatNumber(model.rows.length) + '</span>',
-      '<span class="report-pill sla-pill-' + getSlaToneClass(model.statsB.deliveryRate) + '">SLA final: ' + U.formatPercent(model.statsB.deliveryRate || 0, 2) + '</span>',
-      '</div>',
-      '</div>',
-      '<section class="comparison-side-grid">',
-      '<article class="comparison-panel panel-a">',
-      '<div class="comparison-panel__eyebrow">Período A</div>',
-      '<h3>' + U.escapeHtml(model.labelA) + '</h3>',
-      '<div class="comparison-panel__meta">Expedido ' + U.formatNumber(model.statsA.totalExpedido || 0) + ' • Entregues ' + U.formatNumber(model.statsA.totalEntregue || 0) + ' • SLA ' + U.formatPercent(model.statsA.deliveryRate || 0, 2) + '</div>',
-      '</article>',
-      '<article class="comparison-panel panel-b">',
-      '<div class="comparison-panel__eyebrow">Período B</div>',
-      '<h3>' + U.escapeHtml(model.labelB) + '</h3>',
-      '<div class="comparison-panel__meta">Expedido ' + U.formatNumber(model.statsB.totalExpedido || 0) + ' • Entregues ' + U.formatNumber(model.statsB.totalEntregue || 0) + ' • SLA ' + U.formatPercent(model.statsB.deliveryRate || 0, 2) + '</div>',
-      '</article>',
-      '</section>',
-      '<section class="summary-grid reports-summary-grid comparison-summary-grid">',
-      deltaCardHtml('Expedido', U.formatNumber(model.statsA.totalExpedido || 0), U.formatNumber(model.statsB.totalExpedido || 0), model.deltas.totalExpedido, 'number', false),
-      deltaCardHtml('Entregues', U.formatNumber(model.statsA.totalEntregue || 0), U.formatNumber(model.statsB.totalEntregue || 0), model.deltas.totalEntregue, 'number', false),
-      deltaCardHtml('Pendências', U.formatNumber(model.statsA.totalPendente || 0), U.formatNumber(model.statsB.totalPendente || 0), model.deltas.totalPendente, 'number', true),
-      deltaCardHtml('Insucesso', U.formatNumber(model.statsA.totalInsucesso || 0), U.formatNumber(model.statsB.totalInsucesso || 0), model.deltas.totalInsucesso, 'number', true),
-      deltaCardHtml('SLA', U.formatPercent(model.statsA.deliveryRate || 0, 2), U.formatPercent(model.statsB.deliveryRate || 0, 2), model.deltas.deliveryRate, 'percent', false),
-      '</section>',
-      '<section class="comparison-insights-grid">',
-      model.highlights.map(function (text) {
-        return '<article class="comparison-insight"><small>Insight automático</small><strong>' + U.escapeHtml(text) + '</strong><span>Conciliação inteligente focada no que mudou entre os períodos.</span></article>';
-      }).join(''),
-      '</section>',
-      '<article class="card report-inner-card"><div class="section-header"><h3>Diferenças por base</h3><span class="text-soft">Side-by-side estrito com foco no que mudou</span></div>' + diffTableHtml(model.rows) + '</article>',
-      '</section>'
-    ].join('');
-  }
-
-  async function compareSelected() {
-    if (state.selectedIds.length !== 2) {
-      U.showMessage('reportsMessage', 'Selecione exatamente 2 snapshots para comparar.', 'warning');
-      return;
-    }
-    const snapshots = await Promise.all(state.selectedIds.map(function (id) { return Store.getSnapshotById(id); }));
-    if (snapshots.some(function (item) { return !item; })) {
-      U.showMessage('reportsMessage', 'Falha ao carregar um dos snapshots selecionados.', 'error');
-      return;
-    }
-    const ordered = snapshots.slice().sort(function (a, b) { return String(a.savedAt).localeCompare(String(b.savedAt)); });
-    renderComparison(buildComparisonModel(
-      'Comparação entre snapshots selecionados',
-      U.formatDateTimeBR(ordered[0].savedAt),
-      U.formatDateTimeBR(ordered[1].savedAt),
-      ordered[0],
-      ordered[1],
-      { mode: 'snapshots' }
-    ));
-  }
-
-  function compareWindows() {
-    const aStart = parseDateTimeInput('compareAStart');
-    const aEnd = parseDateTimeInput('compareAEnd');
-    const bStart = parseDateTimeInput('compareBStart');
-    const bEnd = parseDateTimeInput('compareBEnd');
-
-    if (!aStart || !aEnd || !bStart || !bEnd) {
-      U.showMessage('reportsMessage', 'Preencha início e fim dos dois períodos.', 'warning');
-      return;
-    }
-
-    const snapshotsA = getWindowSnapshots(aStart, aEnd);
-    const snapshotsB = getWindowSnapshots(bStart, bEnd);
-
-    if (!snapshotsA.length || !snapshotsB.length) {
-      U.showMessage('reportsMessage', 'Não existem snapshots suficientes dentro das janelas escolhidas.', 'warning');
-      return;
-    }
-
-    const periodA = buildPeriodModel('Período A', snapshotsA);
-    const periodB = buildPeriodModel('Período B', snapshotsB);
-
-    renderComparison(buildComparisonModel(
-      'Comparação por janelas de tempo',
-      U.formatDateTimeBR(aStart) + ' até ' + U.formatDateTimeBR(aEnd),
-      U.formatDateTimeBR(bStart) + ' até ' + U.formatDateTimeBR(bEnd),
-      periodA.representative,
-      periodB.representative,
-      { mode: 'windows', periodA: periodA, periodB: periodB }
-    ));
-  }
-
-  async function copyElementAsImage(selector, filenameBase) {
-    const element = typeof selector === 'string' ? document.querySelector(selector) : selector;
-    if (!element || !window.html2canvas) {
-      U.showMessage('reportsMessage', 'Não foi possível gerar a imagem deste bloco.', 'warning');
-      return;
-    }
-
-    const canvas = await window.html2canvas(element, {
-      backgroundColor: '#f3f6fb',
-      scale: Math.max(2, window.devicePixelRatio || 1),
-      useCORS: true,
-      logging: false
+  function renderBasesTable(model) {
+    const container = U.byId("basesTable");
+    if (!container) return;
+    const rows = model.baseMetrics.slice().sort(function (a, b) {
+      return b.total - a.total;
     });
+    container.innerHTML = [
+      '<div class="reports-table-wrap-x"><table class="mega-table mega-table-large"><thead><tr>',
+      '<th>Base</th><th>Regional</th><th class="t-right">Total</th><th class="t-right">Entregues</th><th class="t-right">Insucessos</th><th class="t-right">Pendências</th><th class="t-right">SLA</th>',
+      '</tr></thead><tbody>',
+      rows.map(function (item) {
+        const pendencias = Number(item.pendente || 0) + Number(item.naoEntregue || 0);
+        const slaInfo = getSlaColor(item.taxa);
+        return `<tr><td><strong>${escapeHtml(item.base)}</strong></td><td>${escapeHtml(item.regional || '-')}</td><td class="t-right">${formatNumber(item.total)}</td><td class="t-right">${formatNumber(item.entregue)}</td><td class="t-right">${formatNumber(item.insucesso)}</td><td class="t-right">${formatNumber(pendencias)}</td><td class="t-right"><span class="sla-badge ${slaInfo.class}">${formatPercent(item.taxa, 1)}</span></td></tr>`;
+      }).join('') || '<tr><td colspan="7" class="t-center">Sem dados para a seleção atual.</td></tr>',
+      '</tbody></table></div>'
+    ].join('');
+  }
 
+  function renderEmptyDashboard() {
+    renderSummary({ sources: [], summary: buildGlobalSummary([]), baseMetrics: [], latestUpdate: null });
+    renderCriticalAlerts({ sources: [], summary: buildGlobalSummary([]), baseMetrics: [] });
+    const empty = '<div class="empty-report-state">Selecione pelo menos um arquivo ou período para montar o relatório consolidado.</div>';
+    U.setHtml("basesTable", empty);
+    U.setHtml("offendersTable", empty);
+    U.setHtml("stageTimeline", '');
+    if (window.Plotly) {
+      Plotly.purge(U.byId("baseChart"));
+      Plotly.purge(U.byId("statusChart"));
+    }
+  }
+
+  function renderDashboard() {
+    const selected = getSelectedSources();
+    if (!selected.length) {
+      renderEmptyDashboard();
+      clearMessage();
+      return;
+    }
+    clearMessage();
+    const model = buildAggregatedModel(selected);
+    renderSummary(model);
+    renderCriticalAlerts(model);
+    renderStageTimeline(model);
+    renderBaseChart(model);
+    renderStatusChart(model);
+    renderOffenders(model);
+    renderBasesTable(model);
+  }
+
+  async function captureElement(targetId, preferredScale) {
+    const el = U.byId(targetId);
+    if (!el || !window.html2canvas) return null;
+    const rect = el.getBoundingClientRect();
+    const targetScale = preferredScale || 2;
+    const scale = Math.max(targetScale, rect.width ? 3840 / rect.width : targetScale);
+    return html2canvas(el, {
+      backgroundColor: "#ffffff",
+      scale: scale,
+      useCORS: true,
+      allowTaint: true,
+      logging: false,
+      width: el.scrollWidth,
+      height: el.scrollHeight,
+      windowWidth: Math.max(document.documentElement.clientWidth, el.scrollWidth),
+      windowHeight: Math.max(document.documentElement.clientHeight, el.scrollHeight),
+      scrollX: 0,
+      scrollY: -window.scrollY
+    });
+  }
+
+  async function exportElementAsPng(targetId, filename) {
+    const canvas = await captureElement(targetId, 2);
+    if (!canvas) return;
+    const url = canvas.toDataURL("image/png");
+    U.downloadBlobURL(url, filename || "relatorio.png");
+  }
+
+  async function exportElementAs4kPng(targetId, filename) {
+    showMessage("Gerando relatório em alta resolução... Aguarde.", "info");
+    const canvas = await captureElement(targetId, 3);
+    if (!canvas) return;
+    const url = canvas.toDataURL("image/png");
+    U.downloadBlobURL(url, filename || "relatorio-4k.png");
+    showMessage("Relatório completo baixado com sucesso.", "success");
+  }
+
+  async function copyElementAsImage(targetId) {
+    if (!navigator.clipboard || !window.ClipboardItem) return;
+    showMessage("Preparando imagem completa para cópia... Aguarde.", "info");
+    const canvas = await captureElement(targetId, 2);
+    if (!canvas) return;
     return new Promise(function (resolve, reject) {
       canvas.toBlob(async function (blob) {
         if (!blob) {
@@ -705,321 +832,120 @@
           return;
         }
         try {
-          await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
-          U.showMessage('reportsMessage', 'Imagem copiada para a área de transferência.', 'success');
-          resolve(true);
+          await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
+          showMessage("Relatório copiado para a área de transferência.", "success");
+          resolve();
         } catch (error) {
+          showMessage("Falha ao copiar. Tente a opção de download.", "error");
           reject(error);
         }
-      }, 'image/png');
-    }).catch(function () {
-      U.showMessage('reportsMessage', 'Não foi possível copiar a imagem neste navegador.', 'warning');
+      });
     });
-  }
-
-  async function downloadElementAsPng(selector, filename) {
-    const element = typeof selector === 'string' ? document.querySelector(selector) : selector;
-    if (!element || !window.html2canvas) {
-      U.showMessage('reportsMessage', 'Não foi possível baixar este bloco como PNG.', 'warning');
-      return;
-    }
-    const canvas = await window.html2canvas(element, {
-      backgroundColor: '#f3f6fb',
-      scale: Math.max(2, window.devicePixelRatio || 1),
-      useCORS: true,
-      logging: false
-    });
-    const url = canvas.toDataURL('image/png');
-    U.downloadBlobURL(url, filename);
-  }
-
-  function downloadSvgString(svgString, filename) {
-    const blob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    U.downloadBlobURL(url, filename);
-    setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
-  }
-
-  async function exportPlotlyImage(format, filename) {
-    const chart = byId('historyChart');
-    if (!PlotlyLib || !chart || !chart.data || !chart.data.length) {
-      U.showMessage('reportsMessage', 'Não existe gráfico pronto para exportar.', 'warning');
-      return;
-    }
-    const url = await PlotlyLib.toImage(chart, {
-      format: format,
-      width: 1600,
-      height: 620,
-      scale: 2
-    });
-    U.downloadBlobURL(url, filename);
-  }
-
-  async function copyPlotlyImage() {
-    const chart = byId('historyChart');
-    if (!PlotlyLib || !chart || !chart.data || !chart.data.length) {
-      U.showMessage('reportsMessage', 'Não existe gráfico pronto para copiar.', 'warning');
-      return;
-    }
-    const url = await PlotlyLib.toImage(chart, {
-      format: 'png',
-      width: 1600,
-      height: 620,
-      scale: 2
-    });
-    const blob = await fetch(url).then(function (resp) { return resp.blob(); });
-    try {
-      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
-      U.showMessage('reportsMessage', 'Gráfico copiado como imagem.', 'success');
-    } catch (error) {
-      U.showMessage('reportsMessage', 'Não foi possível copiar o gráfico neste navegador.', 'warning');
-    }
-  }
-
-  function renderHistoryChart(items) {
-    const chart = byId('historyChart');
-    if (!chart || !PlotlyLib) return;
-
-    const baseFilter = getFilters().base;
-    const series = items.slice().reverse();
-
-    if (!series.length) {
-      chart.innerHTML = '<div class="report-viewer-empty">Sem snapshots para montar o gráfico histórico.</div>';
-      return;
-    }
-
-    const x = series.map(function (item) { return item.savedAt; });
-    const stats = series.map(function (item) { return getSnapshotStats(item, baseFilter); });
-
-    const data = [
-      {
-        type: 'bar',
-        name: 'Entregues',
-        x: x,
-        y: stats.map(function (s) { return s.totalEntregue; }),
-        marker: { color: '#2563eb', opacity: 0.9 },
-        hovertemplate: '%{x}<br>Entregues: %{y:,}<extra></extra>'
-      },
-      {
-        type: 'bar',
-        name: 'Insucesso',
-        x: x,
-        y: stats.map(function (s) { return s.totalInsucesso; }),
-        marker: { color: '#ef4444', opacity: 0.86 },
-        hovertemplate: '%{x}<br>Insucesso: %{y:,}<extra></extra>'
-      },
-      {
-        type: 'bar',
-        name: 'Pendências',
-        x: x,
-        y: stats.map(function (s) { return s.totalPendente; }),
-        marker: { color: '#f59e0b', opacity: 0.84 },
-        hovertemplate: '%{x}<br>Pendências: %{y:,}<extra></extra>'
-      },
-      {
-        type: 'scatter',
-        mode: 'lines+markers',
-        name: 'SLA',
-        x: x,
-        y: stats.map(function (s) { return s.deliveryRate; }),
-        yaxis: 'y2',
-        line: { color: '#16a34a', width: 3 },
-        marker: { size: 7, color: '#166534' },
-        hovertemplate: '%{x}<br>SLA: %{y:.2f}%<extra></extra>'
-      }
-    ];
-
-    const layout = {
-      barmode: 'stack',
-      margin: { t: 18, r: 54, b: 54, l: 56 },
-      paper_bgcolor: 'rgba(0,0,0,0)',
-      plot_bgcolor: 'rgba(248,250,252,0.86)',
-      legend: { orientation: 'h', y: 1.16, x: 0, font: { size: 12 } },
-      hovermode: 'x unified',
-      xaxis: {
-        type: 'date',
-        showgrid: true,
-        gridcolor: 'rgba(203,213,225,0.45)',
-        tickfont: { size: 11 }
-      },
-      yaxis: {
-        title: 'Volume',
-        showgrid: true,
-        gridcolor: 'rgba(203,213,225,0.45)',
-        zerolinecolor: 'rgba(148,163,184,0.5)'
-      },
-      yaxis2: {
-        title: 'SLA %',
-        overlaying: 'y',
-        side: 'right',
-        range: [0, 100],
-        tickformat: '.0f'
-      }
-    };
-
-    PlotlyLib.newPlot(chart, data, layout, {
-      responsive: true,
-      displaylogo: false,
-      modeBarButtonsToRemove: ['lasso2d', 'select2d', 'autoScale2d']
-    });
-  }
-
-  async function loadReports() {
-    state.allItems = await Store.listSnapshots({});
-    populateBaseFilter(state.allItems);
-    await applyFilters();
-  }
-
-  async function applyFilters() {
-    const filters = getFilters();
-    state.items = await Store.listSnapshots(filters);
-    updateHeaderBadges(state.items);
-    renderStats(state.items);
-    renderList(state.items);
-    renderHistoryChart(state.items);
-    if (state.openedId && !state.items.some(function (item) { return item.id === state.openedId; })) {
-      state.openedId = null;
-      byId('reportViewer').className = 'report-viewer-empty';
-      byId('reportViewer').innerHTML = 'Selecione um relatório para visualizar os números gerais, as bases, os motoristas e os sinais de operação.';
-    }
-  }
-
-  async function clearFilters() {
-    ['startDateTime', 'endDateTime', 'reportSearch'].forEach(function (id) {
-      if (byId(id)) byId(id).value = '';
-    });
-    if (byId('reportBaseFilter')) byId('reportBaseFilter').value = 'all';
-    await applyFilters();
-  }
-
-  async function deleteSnapshot(id) {
-    await Store.deleteSnapshot(id);
-    state.selectedIds = state.selectedIds.filter(function (value) { return value !== id; });
-    if (state.openedId === id) state.openedId = null;
-    await loadReports();
-    U.showMessage('reportsMessage', 'Snapshot removido com sucesso.', 'success');
-  }
-
-  async function clearAllSnapshots() {
-    if (!window.confirm('Deseja apagar todo o histórico local de snapshots?')) return;
-    await Store.clearAllSnapshots();
-    state.selectedIds = [];
-    state.openedId = null;
-    state.comparisonModel = null;
-    byId('comparisonResult').hidden = true;
-    byId('comparisonEmpty').hidden = false;
-    byId('reportViewer').className = 'report-viewer-empty';
-    byId('reportViewer').innerHTML = 'Selecione um relatório para visualizar os números gerais, as bases, os motoristas e os sinais de operação.';
-    await loadReports();
-    U.showMessage('reportsMessage', 'Histórico local apagado.', 'success');
   }
 
   function bindEvents() {
-    byId('applyReportFilters').addEventListener('click', applyFilters);
-    byId('clearReportFilters').addEventListener('click', clearFilters);
-    byId('compareSelectedBtn').addEventListener('click', compareSelected);
-    byId('compareWindowsBtn').addEventListener('click', compareWindows);
-    byId('clearReportsBtn').addEventListener('click', clearAllSnapshots);
-    byId('compareChangedOnly').addEventListener('change', function () {
-      if (!state.comparisonModel) return;
-      if (state.comparisonModel.meta && state.comparisonModel.meta.mode === 'snapshots') compareSelected(); else compareWindows();
+    const selectAllBtn = U.byId("selectAllBtn");
+    const clearSelectionBtn = U.byId("clearSelectionBtn");
+    const refreshBtn = U.byId("refreshReportBtn");
+    const copyBtn = U.byId("copyReportBtn");
+    const downloadBtn = U.byId("downloadReportBtn");
+    const list = U.byId("snapshotsList");
+    const clearReportsBtn = U.byId("clearReportsBtn");
+
+    if (refreshBtn) refreshBtn.addEventListener("click", function () {
+      loadSources();
+      showMessage("Dados atualizados com sucesso.", "success");
     });
 
-    byId('reportsList').addEventListener('click', function (event) {
-      const openBtn = event.target.closest('.report-open-btn');
-      const deleteBtn = event.target.closest('.report-delete-btn');
-      const row = event.target.closest('.report-row');
-      if (openBtn) {
-        openSnapshot(openBtn.getAttribute('data-report-id'));
-        return;
-      }
-      if (deleteBtn) {
-        deleteSnapshot(deleteBtn.getAttribute('data-report-id'));
-        return;
-      }
-      if (row && !event.target.closest('button') && !event.target.closest('input')) {
-        openSnapshot(row.getAttribute('data-report-id'));
+    if (copyBtn) copyBtn.addEventListener("click", async function () {
+      try {
+        await copyElementAsImage("reportsExportArea");
+      } catch (error) {
+        console.error(error);
       }
     });
 
-    byId('reportsList').addEventListener('change', function (event) {
-      const checkbox = event.target.closest('.report-select');
+    if (downloadBtn) downloadBtn.addEventListener("click", async function () {
+      try {
+        await exportElementAs4kPng("reportsExportArea", "relatorio-consolidado-4k.png");
+      } catch (error) {
+        console.error(error);
+        showMessage("Falha ao gerar download.", "error");
+      }
+    });
+
+    if (selectAllBtn) selectAllBtn.addEventListener("click", function () {
+      state.selectedIds = state.filteredSources.map(function (item) { return item.id; });
+      renderSourceList();
+      renderDashboard();
+      showMessage(`${state.selectedIds.length} fonte(s) selecionada(s). Análise consolidada pronta.`, "success");
+    });
+
+    if (clearSelectionBtn) clearSelectionBtn.addEventListener("click", function () {
+      state.selectedIds = [];
+      renderSourceList();
+      renderDashboard();
+      showMessage("Seleção limpa. Marque os períodos que deseja analisar.", "info");
+    });
+
+    if (list) list.addEventListener("change", function (event) {
+      const checkbox = event.target.closest("[data-source-checkbox]");
       if (!checkbox) return;
-      const id = checkbox.getAttribute('data-report-id');
-      if (checkbox.checked) {
-        if (!state.selectedIds.includes(id)) state.selectedIds.push(id);
-        if (state.selectedIds.length > 2) {
-          const removed = state.selectedIds.shift();
-          const oldInput = document.querySelector('.report-select[data-report-id="' + removed + '"]');
-          if (oldInput) oldInput.checked = false;
-        }
-      } else {
-        state.selectedIds = state.selectedIds.filter(function (value) { return value !== id; });
+      toggleSelection(checkbox.getAttribute("data-source-checkbox"), checkbox.checked);
+    });
+
+    if (list) list.addEventListener("click", function (event) {
+      const card = event.target.closest("[data-source-id]");
+      if (!card || event.target.closest("input")) return;
+      const id = card.getAttribute("data-source-id");
+      const checked = !state.selectedIds.includes(id);
+      toggleSelection(id, checked);
+    });
+
+    if (clearReportsBtn) clearReportsBtn.addEventListener("click", async function () {
+      if (!Store.clearAllSnapshots) return;
+      const confirmed = window.confirm("Deseja apagar todo o histórico de períodos salvos?");
+      if (!confirmed) return;
+      await Store.clearAllSnapshots();
+      state.allSources = [];
+      state.filteredSources = [];
+      state.selectedIds = [];
+      renderSourceList();
+      renderDashboard();
+      updateSnapshotBadges();
+      showMessage("Histórico local apagado com sucesso.", "success");
+    });
+
+    // Collapse/Expand sources panel
+    const collapseBtn = U.byId("collapseSources");
+    const sourcesPanel = U.byId("sourcesPanel");
+    if (collapseBtn && sourcesPanel) {
+      // Load saved state
+      const isSaved = localStorage.getItem("reports_sources_collapsed");
+      if (isSaved === "true") {
+        sourcesPanel.classList.add("is-collapsed");
       }
-    });
 
-    byId('copyOpenReportBtn').addEventListener('click', function () {
-      copyElementAsImage('#reportViewerExport', 'relatorio_snapshot');
-    });
-    byId('downloadOpenReportBtn').addEventListener('click', function () {
-      downloadElementAsPng('#reportViewerExport', 'relatorio_snapshot.png');
-    });
-    byId('downloadOpenReportSvgBtn').addEventListener('click', async function () {
-      if (!state.openedId) {
-        U.showMessage('reportsMessage', 'Abra um relatório antes de exportar em SVG.', 'warning');
-        return;
-      }
-      const snapshot = await Store.getSnapshotById(state.openedId);
-      if (!snapshot) return;
-      downloadSvgString(buildReportSvg(snapshot), 'relatorio_snapshot.svg');
-    });
-
-    byId('copyComparisonBtn').addEventListener('click', function () {
-      copyElementAsImage('#comparisonExport', 'comparacao_snapshot');
-    });
-    byId('downloadComparisonBtn').addEventListener('click', function () {
-      downloadElementAsPng('#comparisonExport', 'comparacao_snapshot.png');
-    });
-    byId('downloadComparisonSvgBtn').addEventListener('click', function () {
-      if (!state.comparisonModel) {
-        U.showMessage('reportsMessage', 'Gere uma comparação antes de exportar em SVG.', 'warning');
-        return;
-      }
-      downloadSvgString(buildComparisonSvg(state.comparisonModel), 'comparacao_snapshot.svg');
-    });
-
-    byId('copyChartBtn').addEventListener('click', copyPlotlyImage);
-    byId('downloadChartPngBtn').addEventListener('click', function () { exportPlotlyImage('png', 'historico_operacional.png'); });
-    byId('downloadChartSvgBtn').addEventListener('click', function () { exportPlotlyImage('svg', 'historico_operacional.svg'); });
-
-    ['startDateTime', 'endDateTime', 'reportSearch', 'reportBaseFilter'].forEach(function (id) {
-      const el = byId(id);
-      if (!el) return;
-      const handler = id === 'reportSearch' ? U.debounce(applyFilters, 280) : applyFilters;
-      el.addEventListener('input', handler);
-      el.addEventListener('change', handler);
-    });
-  }
-
-  function seedCompareInputs() {
-    const latest = state.allItems[0];
-    const previous = state.allItems[1];
-    if (!latest) return;
-    const latestDate = new Date(latest.savedAt);
-    const prevDate = previous ? new Date(previous.savedAt) : new Date(latestDate.getTime() - 60 * 60 * 1000);
-
-    byId('compareBStart').value = formatInputDate(new Date(latestDate.getTime() - 30 * 60 * 1000));
-    byId('compareBEnd').value = formatInputDate(latestDate);
-    byId('compareAStart').value = formatInputDate(new Date(prevDate.getTime() - 30 * 60 * 1000));
-    byId('compareAEnd').value = formatInputDate(prevDate);
+      collapseBtn.addEventListener("click", function () {
+        sourcesPanel.classList.toggle("is-collapsed");
+        const isNowCollapsed = sourcesPanel.classList.contains("is-collapsed");
+        localStorage.setItem("reports_sources_collapsed", String(isNowCollapsed));
+      });
+    }
   }
 
   async function init() {
-    if (!Store) return;
     bindEvents();
-    await loadReports();
-    seedCompareInputs();
+    try {
+      await loadSources();
+      if (!state.allSources.length) {
+        showMessage("Nenhum arquivo/lote foi salvo ainda. Gere painéis no Dashboard para alimentar esta aba.", "info");
+      }
+    } catch (error) {
+      console.error(error);
+      showMessage(error.message || "Falha ao carregar o histórico local.", "error");
+    }
   }
 
-  document.addEventListener('DOMContentLoaded', init);
+  document.addEventListener("DOMContentLoaded", init);
 })();

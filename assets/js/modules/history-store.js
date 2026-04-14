@@ -100,6 +100,9 @@
       totalInsucesso: Number(payload.summary && payload.summary.totalInsucesso || 0),
       baseMetrics: (payload.baseMetrics || []).map(function (item) {
         return [item.base, item.total, item.entregue, item.insucesso, item.pendente, item.taxa];
+      }),
+      fileItems: (payload.fileItems || []).map(function (item) {
+        return [item.fileName, item.rowCount, item.selectedSheetName];
       })
     };
 
@@ -121,7 +124,8 @@
       rowCount: Number(payload.rowCount || 0),
       summary: payload.summary || {},
       baseMetrics: Array.isArray(payload.baseMetrics) ? payload.baseMetrics : [],
-      drivers: Array.isArray(payload.drivers) ? payload.drivers : []
+      drivers: Array.isArray(payload.drivers) ? payload.drivers : [],
+      fileItems: Array.isArray(payload.fileItems) ? payload.fileItems : []
     });
   }
 

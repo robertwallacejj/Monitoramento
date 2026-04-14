@@ -593,6 +593,25 @@
     const baseMetrics = getBaseMetrics();
     const global = getGlobalSummary(baseMetrics);
     const drivers = getAllDriversData();
+    const fileItems = (preview && preview.files ? preview.files : []).map(function (item) {
+      const rows = Array.isArray(item.normalizedRows) ? item.normalizedRows : [];
+      const itemBaseMetrics = Metrics.aggregateBaseMetrics(rows);
+      const itemDrivers = Metrics.aggregateDrivers(rows).filter(function (driverItem) {
+        return driverItem.base && driverItem.driver;
+      });
+      const itemGlobal = getGlobalSummary(itemBaseMetrics);
+
+      return {
+        id: [item.fileName, item.selectedSheetName || '', rows.length].join('::'),
+        fileName: item.fileName,
+        selectedSheetName: item.selectedSheetName || '',
+        rowCount: rows.length,
+        rows: rows,
+        summary: buildOperationalSummary(itemBaseMetrics, itemGlobal),
+        baseMetrics: itemBaseMetrics,
+        drivers: itemDrivers
+      };
+    });
 
     return {
       savedAt: new Date().toISOString(),
@@ -603,7 +622,8 @@
       rowCount: state.rows.length,
       summary: buildOperationalSummary(baseMetrics, global),
       baseMetrics: baseMetrics,
-      drivers: drivers
+      drivers: drivers,
+      fileItems: fileItems
     };
   }
 
