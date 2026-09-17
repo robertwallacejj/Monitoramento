@@ -9,13 +9,11 @@
       home: "../index.html",
       dashboard: "./dashboard.html",
       relatorios: "./relatorios.html",
-      insucessos: "./insucessos.html",
       acompanhamentoGeral: "./acompanhamento-geral.html",
       acareacao: "./acareacao.html"
     },
     storageKeys: {
       monitoramento: "monitoramento_local_state_v2",
-      insucessos: "insucessos_local_state_v2",
       acompanhamentoGeral: "acompanhamentoGeralState.v1",
       relatorios: "monitoramento_reports_db"
     },

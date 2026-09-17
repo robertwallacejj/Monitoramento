@@ -6,6 +6,7 @@
   <meta name="description" content="Painel operacional local para leitura de Excel e geração de dashboards por base." />
   <title>Dashboard | Monitoramento de Entregas SP</title>
   <link rel="stylesheet" href="../assets/css/style.css" />
+  <link rel="stylesheet" href="../assets/css/insucessos.css" />
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
@@ -15,6 +16,7 @@
   <script defer src="../assets/js/core/domain.js"></script>
   <script defer src="../assets/js/modules/excel.js"></script>
   <script defer src="../assets/js/modules/metrics.js"></script>
+  <script defer src="../assets/js/modules/insucessos-metrics.js"></script>
   <script defer src="../assets/js/modules/charts.js"></script>
   <script defer src="../assets/js/modules/history-store.js"></script>
   <script defer src="../assets/js/modules/dashboard.js"></script>
@@ -30,7 +32,6 @@
         <div class="tabs">
           <a href="./dashboard.html" class="tab-btn active">Dashboard</a>
           <a href="./relatorios.html" class="tab-btn">Relatórios</a>
-          <a href="./insucessos.html" class="tab-btn">Insucessos</a>
           <a href="./acompanhamento-geral.html" class="tab-btn">Acompanhamento Geral</a>
           <a href="./acareacao.html" class="tab-btn">Acareação</a>
         </div>
@@ -139,6 +140,8 @@
 
     <section id="dashboardsContent" class="dashboards-list"></section>
 
+    <section id="dashboard-insucessos-container" class="insucessos-grid" aria-live="polite"></section>
+
     <section class="card smart-summary-card">
       <div class="section-header">
         <h3>Resumo inteligente da última importação</h3>
@@ -183,6 +186,6 @@
     </section>
   </main>
 
-  <div class="page-shell-footer">Central de monitoramento com menu inicial, dashboard, relatórios, insucessos, acompanhamento geral e acareação.</div>
+  <div class="page-shell-footer">Central de monitoramento com menu inicial, dashboard, relatórios, acompanhamento geral e acareação.</div>
 </body>
 </html>

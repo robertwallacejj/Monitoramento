@@ -218,13 +218,16 @@
   }
 
   function buildSummary(rows) {
-    const baseRank = groupCount(rows, "base");
-    const dateRank = groupCount(rows, "date");
-    const reasonRank = groupCount(rows, "reason");
+    const failureRows = (rows || []).filter(function (row) {
+      return isInsucessoRow(row);
+    });
+    const baseRank = groupCount(failureRows, "base");
+    const dateRank = groupCount(failureRows, "date");
+    const reasonRank = groupCount(failureRows, "reason");
 
-    const totalInsucessos = rows.length;
-    const totalBases = new Set(rows.map(function (item) { return item.base; })).size;
-    const totalDatas = new Set(rows.map(function (item) { return item.date; })).size;
+    const totalInsucessos = failureRows.length;
+    const totalBases = new Set(failureRows.map(function (item) { return item.base; })).size;
+    const totalDatas = new Set(failureRows.map(function (item) { return item.date; })).size;
 
     return {
       totalInsucessos: totalInsucessos,
@@ -235,6 +238,106 @@
       topDate: dateRank.length ? dateRank[0].label : "--",
       avgPerBase: totalBases ? totalInsucessos / totalBases : 0,
       avgPerDate: totalDatas ? totalInsucessos / totalDatas : 0
+    };
+  }
+
+  function normalizeReasonValue(value) {
+    const normalized = D.cleanReasonText(value || "");
+    return normalized || "Motivo não informado";
+  }
+
+  function isInsucessoRow(row) {
+    if (!row) return false;
+
+    const status = String(row.status || row.estado || "").trim().toLowerCase();
+    if (status === "insucesso") return true;
+
+    const reason = String(row.reason || row.problemReason || "").trim();
+    if (reason) return true;
+
+    return Boolean(row.problematic || row.problematico || row.isFailure);
+  }
+
+  function groupInsucessoByColumnI(rows) {
+    const safeRows = Array.isArray(rows) ? rows : [];
+
+    return safeRows.reduce(function (grouped, row) {
+      if (!isInsucessoRow(row)) {
+        return grouped;
+      }
+
+      const rawSource = row && row.raw ? row.raw : row;
+      const reasonFromColumnI = D.getColumnValue(rawSource, 8, D.COLUMN_GROUPS.columnI);
+      const reasonFromRow = row && (row.I || row.reason || row.problemReason || row.reasonKey);
+      const finalReason = reasonFromColumnI || reasonFromRow || "Motivo não informado";
+      const label = normalizeReasonValue(finalReason);
+
+      if (!grouped[label]) {
+        grouped[label] = { label: label, total: 0, percent: 0 };
+      }
+
+      grouped[label].total += 1;
+      return grouped;
+    }, {});
+  }
+
+  function groupInsucessoByDriver(rows) {
+    const safeRows = Array.isArray(rows) ? rows : [];
+
+    return safeRows.reduce(function (grouped, row) {
+      if (!isInsucessoRow(row)) {
+        return grouped;
+      }
+
+      const driver = String((row && (row.driver || row.entregador || row.motorista)) || "Não informado").trim() || "Não informado";
+      const base = String((row && (row.base || row.baseName)) || "Base não informada").trim() || "Base não informada";
+      const key = driver + "__" + base;
+
+      if (!grouped[key]) {
+        grouped[key] = {
+          driver: driver,
+          base: base,
+          total: 0,
+          percent: 0
+        };
+      }
+
+      grouped[key].total += 1;
+      return grouped;
+    }, {});
+  }
+
+  function buildGeneralSlaSummary(rows) {
+    const safeRows = Array.isArray(rows) ? rows : [];
+    const totalExpedido = safeRows.length;
+
+    const failureRows = safeRows.filter(function (row) {
+      return isInsucessoRow(row);
+    });
+
+    const totalInsucessos = failureRows.length;
+    const grouped = groupInsucessoByColumnI(failureRows);
+
+    const reasonBreakdown = Object.keys(grouped)
+      .map(function (label) {
+        const item = grouped[label];
+        const percent = totalExpedido ? (item.total / totalExpedido) * 100 : 0;
+
+        return {
+          label: label,
+          total: item.total,
+          percent: Number(percent)
+        };
+      })
+      .sort(function (a, b) {
+        if (b.total !== a.total) return b.total - a.total;
+        return a.label.localeCompare(b.label, "pt-BR");
+      });
+
+    return {
+      totalExpedido: totalExpedido,
+      totalInsucessos: totalInsucessos,
+      reasonBreakdown: reasonBreakdown
     };
   }
 
@@ -266,7 +369,11 @@
   }
 
   function buildInsightText(rows) {
-    if (!rows.length) {
+    const failureRows = (rows || []).filter(function (row) {
+      return isInsucessoRow(row);
+    });
+
+    if (!failureRows.length) {
       return {
         main: "Importe os arquivos da semana para começar a análise.",
         base: "Sem dados.",
@@ -274,12 +381,13 @@
       };
     }
 
-    const baseRank = groupCount(rows, "base");
-    const reasonRank = groupCount(rows, "reason");
+    const baseRank = groupCount(failureRows, "base");
+    const reasonRank = groupCount(failureRows, "reason");
 
-    const main = "Foram encontrados " + rows.length + " insucesso(s), distribuídos em " +
-      new Set(rows.map(function (item) { return item.base; })).size + " base(s) e " +
-      new Set(rows.map(function (item) { return item.date; })).size + " data(s).";
+    const main = "Foram encontrados " + failureRows.length + " insucesso(s) em " +
+      rows.length + " linha(s) válidas, distribuídos em " +
+      new Set(failureRows.map(function (item) { return item.base; })).size + " base(s) e " +
+      new Set(failureRows.map(function (item) { return item.date; })).size + " data(s).";
 
     const base = baseRank.length
       ? baseRank[0].label + " lidera com " + baseRank[0].total + " insucesso(s)."
@@ -302,6 +410,11 @@
     groupDrivers: groupDrivers,
     filterRows: filterRows,
     buildSummary: buildSummary,
+    normalizeReasonValue: normalizeReasonValue,
+    isInsucessoRow: isInsucessoRow,
+    groupInsucessoByColumnI: groupInsucessoByColumnI,
+    groupInsucessoByDriver: groupInsucessoByDriver,
+    buildGeneralSlaSummary: buildGeneralSlaSummary,
     sortDatesBR: sortDatesBR,
     getSeverityByValue: getSeverityByValue,
     severityLabel: severityLabel,

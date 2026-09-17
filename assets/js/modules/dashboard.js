@@ -4,6 +4,7 @@
   const U = window.CTUtils;
   const Excel = window.CTExcel;
   const Metrics = window.CTMetrics;
+  const InsucessoMetrics = window.CTInsucessosMetrics || null;
   const Charts = window.CTCharts || {};
   const Store = window.CTReportStore || null;
 
@@ -565,6 +566,241 @@
     };
   }
 
+  function formatBrazilTimestamp(date) {
+    const current = date instanceof Date ? date : new Date();
+    const day = String(current.getDate()).padStart(2, "0");
+    const month = String(current.getMonth() + 1).padStart(2, "0");
+    const year = current.getFullYear();
+    const hours = String(current.getHours()).padStart(2, "0");
+    const minutes = String(current.getMinutes()).padStart(2, "0");
+    const seconds = String(current.getSeconds()).padStart(2, "0");
+
+    return day + "/" + month + "/" + year + ", " + hours + ":" + minutes + ":" + seconds;
+  }
+
+  function getDashboardInsucessoBreakdown(rows) {
+    if (!InsucessoMetrics || !Array.isArray(rows)) {
+      return { totalExpedido: 0, totalInsucessos: 0, reasonBreakdown: [], driverBreakdown: [] };
+    }
+
+    const failureRows = rows.filter(function (row) {
+      return InsucessoMetrics.isInsucessoRow(row);
+    });
+
+    const reasonBreakdown = Object.values(InsucessoMetrics.groupInsucessoByColumnI(failureRows) || {}).sort(function (a, b) {
+      if (b.total !== a.total) return b.total - a.total;
+      return String(a.label).localeCompare(String(b.label), "pt-BR");
+    });
+
+    const driverBreakdown = Object.values(InsucessoMetrics.groupInsucessoByDriver(failureRows) || {}).sort(function (a, b) {
+      if (b.total !== a.total) return b.total - a.total;
+      return String(a.driver).localeCompare(String(b.driver), "pt-BR");
+    });
+
+    return {
+      totalExpedido: rows.length,
+      totalInsucessos: failureRows.length,
+      reasonBreakdown: reasonBreakdown,
+      driverBreakdown: driverBreakdown
+    };
+  }
+
+  function formatDashboardPercent(value) {
+    const numeric = Number(value || 0);
+    if (!Number.isFinite(numeric)) return "0%";
+    return numeric.toFixed(numeric % 1 === 0 ? 0 : 1) + "%";
+  }
+
+  function getQtdColorClass(value) {
+    return Number(value || 0) <= 3 ? "qtd-success" : "qtd-danger";
+  }
+
+  function renderDashboardInsucessoTables() {
+    const container = U.byId("dashboard-insucessos-container");
+    if (!container) return;
+
+    const rows = Array.isArray(state.rows) ? state.rows : [];
+    const summary = getDashboardInsucessoBreakdown(rows);
+
+    if (!summary.totalInsucessos) {
+      container.innerHTML = '<div class="card summary-panel dashboard-insucesso-empty"><div class="motivo-header"><div class="motivo-header-main"><div class="motivo-header-topline"><h3>Detalhamento por Motivo</h3></div><div class="report-meta-line"><span>Base do relatório: <strong>Todos</strong></span></div></div><div class="motivo-header-side"><div class="sla-badge-inline"><span class="sla-label">SLA</span><strong>0%</strong></div></div></div><div class="motivo-summary-inline"><div class="motivo-stat stat-success"><span>Total Expedido</span><strong>0</strong></div><div class="motivo-stat stat-warning"><span>Total de Insucessos</span><strong>0</strong></div></div><div class="table-scroll reason-breakdown-wrap"><table class="reason-breakdown-table"><tbody><tr><td colspan="3" class="text-soft">Sem dados para exibir</td></tr></tbody></table></div></div>';
+      return;
+    }
+
+    const totalExpedido = Math.max(summary.totalExpedido || 0, 1);
+    const timestamp = formatBrazilTimestamp(new Date());
+    const reasonRows = summary.reasonBreakdown.map(function (item) {
+      const percent = totalExpedido ? (item.total / totalExpedido) * 100 : 0;
+      return [
+        '<tr>',
+        '<td>' + U.escapeHtml(item.label) + '</td>',
+        '<td class="t-right ' + getQtdColorClass(item.total) + '">' + U.formatNumber(item.total) + '</td>',
+        '<td class="t-right">' + formatDashboardPercent(percent) + '</td>',
+        '</tr>'
+      ].join("");
+    }).join("");
+
+    const driverRows = summary.driverBreakdown.slice(0, 10).map(function (item) {
+      const percent = totalExpedido ? (item.total / totalExpedido) * 100 : 0;
+      return [
+        '<tr>',
+        '<td>' + U.escapeHtml(item.driver || "Não informado") + '</td>',
+        '<td class="t-right ' + getQtdColorClass(item.total) + '">' + U.formatNumber(item.total) + '</td>',
+        '<td class="t-right">' + formatDashboardPercent(percent) + '</td>',
+        '</tr>'
+      ].join("");
+    }).join("");
+
+    const slaValue = totalExpedido ? ((totalExpedido - summary.totalInsucessos) / totalExpedido) * 100 : 0;
+
+    container.innerHTML = [
+      '<div class="card summary-panel dashboard-insucesso-card" id="card-export-motivos">',
+      '<div class="capture-body" data-capture-body="true">',
+      '<div class="motivo-header">',
+      '<div class="motivo-header-main">',
+      '<div class="motivo-header-topline">',
+      '<h3>Detalhamento por Motivo</h3>',
+      '<div class="brand-pill" aria-label="J&T Express"><span class="brand-pill-mark">J&amp;T</span><span class="brand-pill-text">Express</span></div>',
+      '</div>',
+      '<div class="report-meta-line"><span>Base do relatório: <strong>Todos</strong></span></div>',
+      '<small class="text-muted">Atualizado: ' + U.escapeHtml(timestamp) + '</small>',
+      '</div>',
+      '<div class="motivo-header-side"><div class="sla-badge-inline"><span class="sla-label">SLA</span><strong>' + formatDashboardPercent(slaValue) + '</strong></div></div>',
+      '</div>',
+      '<div class="motivo-summary-inline">',
+      '<div class="motivo-stat stat-success"><span>Total Expedido</span><strong>' + U.formatNumber(summary.totalExpedido) + '</strong></div>',
+      '<div class="motivo-stat stat-warning"><span>Total de Insucessos</span><strong>' + U.formatNumber(summary.totalInsucessos) + '</strong></div>',
+      '</div>',
+      '<div class="table-scroll reason-breakdown-wrap"><table class="reason-breakdown-table"><thead><tr><th>Motivo</th><th class="t-right">QTD</th><th class="t-right">%</th></tr></thead><tbody>' + reasonRows + '</tbody></table></div>',
+      '</div>',
+      '<div class="section-actions motivo-actions" data-no-capture="true">',
+      '<button class="btn-secondary export-btn dashboard-export-btn" type="button" data-export-target="card-export-motivos" data-export-action="download">Baixar imagem</button>',
+      '<button class="btn-secondary export-btn dashboard-export-btn" type="button" data-export-target="card-export-motivos" data-export-action="copy">Copiar imagem</button>',
+      '</div>',
+      '</div>',
+      '<div class="card summary-panel dashboard-insucesso-card" id="card-export-motoristas">',
+      '<div class="capture-body" data-capture-body="true">',
+      '<div class="motivo-header">',
+      '<div class="motivo-header-main">',
+      '<div class="motivo-header-topline">',
+      '<h3>Top Motoristas com Insucesso</h3>',
+      '</div>',
+      '<div class="report-meta-line"><span>Base do relatório: <strong>Todos</strong></span></div>',
+      '<small class="text-muted">Atualizado: ' + U.escapeHtml(timestamp) + '</small>',
+      '</div>',
+      '<div class="motivo-header-side"><div class="sla-badge-inline"><span class="sla-label">SLA</span><strong>' + formatDashboardPercent(slaValue) + '</strong></div></div>',
+      '</div>',
+      '<div class="table-scroll reason-breakdown-wrap"><table class="reason-breakdown-table"><thead><tr><th>Motorista</th><th class="t-right">QTD</th><th class="t-right">%</th></tr></thead><tbody>' + driverRows + '</tbody></table></div>',
+      '</div>',
+      '<div class="section-actions motivo-actions" data-no-capture="true">',
+      '<button class="btn-secondary export-btn dashboard-export-btn" type="button" data-export-target="card-export-motoristas" data-export-action="download">Baixar imagem</button>',
+      '<button class="btn-secondary export-btn dashboard-export-btn" type="button" data-export-target="card-export-motoristas" data-export-action="copy">Copiar imagem</button>',
+      '</div>',
+      '</div>'
+    ].join("");
+
+    bindDashboardExportButtons();
+  }
+
+  function bindDashboardExportButtons() {
+    if (document.body.dataset.dashboardExportBound === "true") {
+      return;
+    }
+
+    document.body.dataset.dashboardExportBound = "true";
+
+    document.addEventListener("click", function (event) {
+      const button = event.target && event.target.closest ? event.target.closest(".dashboard-export-btn") : null;
+      if (!button) return;
+
+      const targetId = button.getAttribute("data-export-target");
+      const action = button.getAttribute("data-export-action") || "download";
+      const source = targetId ? document.getElementById(targetId) : null;
+
+      if (!source || typeof window.html2canvas === "undefined") {
+        U.showMessage("appMessage", "Exportação de imagem indisponível neste navegador.", "warning");
+        return;
+      }
+
+      const captureBody = source.querySelector("[data-capture-body='true']") || source;
+      const renderTarget = captureBody.cloneNode(true);
+      renderTarget.classList.add("export-render-target", "export-mode");
+      renderTarget.querySelectorAll("[data-no-capture='true'], .export-btn, .section-actions, .motivo-actions").forEach(function (node) {
+        node.remove();
+      });
+
+      const rect = captureBody.getBoundingClientRect();
+      const fullWidth = Math.max(rect.width, captureBody.scrollWidth || 0);
+      const fullHeight = Math.max(rect.height, captureBody.scrollHeight || 0);
+
+      renderTarget.style.position = "fixed";
+      renderTarget.style.left = "0px";
+      renderTarget.style.top = "0px";
+      renderTarget.style.zIndex = "2147483647";
+      renderTarget.style.width = fullWidth + "px";
+      renderTarget.style.minWidth = fullWidth + "px";
+      renderTarget.style.maxWidth = fullWidth + "px";
+      renderTarget.style.height = fullHeight + "px";
+      renderTarget.style.pointerEvents = "none";
+      renderTarget.style.opacity = "1";
+      renderTarget.style.background = "#ffffff";
+      renderTarget.style.borderRadius = "18px";
+      renderTarget.style.boxShadow = "none";
+      renderTarget.style.padding = "0";
+      renderTarget.style.margin = "0";
+      renderTarget.style.display = "block";
+      renderTarget.style.overflow = "hidden";
+      document.body.appendChild(renderTarget);
+
+      source.classList.add("export-mode");
+
+      (async function () {
+        try {
+          const canvas = await window.html2canvas(renderTarget, {
+            backgroundColor: null,
+            scale: 2,
+            useCORS: true,
+            width: fullWidth,
+            height: fullHeight,
+            logging: false
+          });
+
+          if (action === "copy") {
+            if (!navigator.clipboard || typeof window.ClipboardItem === "undefined") {
+              U.showMessage("appMessage", "Cópia de imagem não suportada neste navegador. Use Baixar imagem.", "warning");
+              return;
+            }
+
+            const originalText = button.textContent;
+            const blobPromise = new Promise(function (resolve) {
+              canvas.toBlob(resolve, "image/png");
+            });
+
+            await navigator.clipboard.write([
+              new window.ClipboardItem({ "image/png": blobPromise })
+            ]);
+
+            button.textContent = "Imagem copiada";
+            setTimeout(function () {
+              button.textContent = originalText;
+            }, 1200);
+          } else {
+            const link = document.createElement("a");
+            link.download = (targetId || "dashboard-card") + ".png";
+            link.href = canvas.toDataURL("image/png");
+            link.click();
+          }
+        } catch (error) {
+          console.error(error);
+          U.showMessage("appMessage", "Não foi possível exportar a imagem do card.", "error");
+        } finally {
+          source.classList.remove("export-mode");
+          renderTarget.remove();
+        }
+      })();
+    });
+  }
+
   function renderSmartSummary(metrics, global) {
     const box = U.byId("smartSummary");
     if (!box) return;
@@ -644,6 +880,7 @@
     populateBaseFilter(baseMetrics);
     populateRegionalFilter(baseMetrics);
     renderMonitorByBase(filteredMetrics);
+    renderDashboardInsucessoTables();
     renderSummary(filteredMetrics, global);
     renderDriverRankings();
     renderCharts(filteredMetrics, global);
