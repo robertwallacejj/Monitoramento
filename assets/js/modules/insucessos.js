@@ -230,11 +230,12 @@
 
     table.innerHTML = ranking.map(function (item) {
       const level = Metrics.getSeverityByValue(item.total, 3, 6);
+      const qtdColor = item.total <= 3 ? '#10B981' : '#EF4444';
 
       return [
         "<tr>",
         '<td class="reason-cell">' + U.escapeHtml(item.label) + "</td>",
-        '<td class="t-right">' + U.formatNumber(item.total) + "</td>",
+        '<td class="t-right" style="color: ' + qtdColor + '; font-weight: 700;">' + U.formatNumber(item.total) + "</td>",
         '<td class="t-right">' + getBadgeHtml(level) + "</td>",
         "</tr>"
       ].join("");
@@ -254,11 +255,12 @@
 
     table.innerHTML = ranking.map(function (item) {
       const level = Metrics.getSeverityByValue(item.total, 3, 6);
+      const qtdColor = item.total <= 3 ? '#10B981' : '#EF4444';
 
       return [
         "<tr>",
         "<td>" + U.escapeHtml(item.label) + "</td>",
-        '<td class="t-right">' + U.formatNumber(item.total) + "</td>",
+        '<td class="t-right" style="color: ' + qtdColor + '; font-weight: 700;">' + U.formatNumber(item.total) + "</td>",
         '<td class="t-right">' + getBadgeHtml(level) + "</td>",
         "</tr>"
       ].join("");
@@ -293,11 +295,12 @@
 
     topTable.innerHTML = top.map(function (item) {
       const level = Metrics.getSeverityByValue(item.total, 2, 5);
+      const qtdColor = item.total <= 3 ? '#10B981' : '#EF4444';
       return [
         "<tr>",
         '<td class="rank-name" data-no-i18n>' + U.escapeHtml(item.driver) + "</td>",
         "<td>" + U.escapeHtml(item.base) + "</td>",
-        '<td class="t-right">' + U.formatNumber(item.total) + "</td>",
+        '<td class="t-right" style="color: ' + qtdColor + '; font-weight: 700;">' + U.formatNumber(item.total) + "</td>",
         '<td class="t-right">' + getBadgeHtml(level) + "</td>",
         "</tr>"
       ].join("");
@@ -305,11 +308,12 @@
 
     lowTable.innerHTML = low.map(function (item) {
       const level = Metrics.getSeverityByValue(item.total, 2, 5);
+      const qtdColor = item.total <= 3 ? '#10B981' : '#EF4444';
       return [
         "<tr>",
         '<td class="rank-name" data-no-i18n>' + U.escapeHtml(item.driver) + "</td>",
         "<td>" + U.escapeHtml(item.base) + "</td>",
-        '<td class="t-right">' + U.formatNumber(item.total) + "</td>",
+        '<td class="t-right" style="color: ' + qtdColor + '; font-weight: 700;">' + U.formatNumber(item.total) + "</td>",
         '<td class="t-right">' + getBadgeHtml(level === "danger" ? "warning" : "success") + "</td>",
         "</tr>"
       ].join("");
