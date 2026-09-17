@@ -615,6 +615,10 @@
     return Number(value || 0) <= 3 ? "qtd-success" : "qtd-danger";
   }
 
+  function getQtdTextColor(value) {
+    return Number(value || 0) <= 3 ? "#10B981" : "#EF4444";
+  }
+
   function renderDashboardInsucessoTables() {
     const container = U.byId("dashboard-insucessos-container");
     if (!container) return;
@@ -631,10 +635,11 @@
     const timestamp = formatBrazilTimestamp(new Date());
     const reasonRows = summary.reasonBreakdown.map(function (item) {
       const percent = totalExpedido ? (item.total / totalExpedido) * 100 : 0;
+      const qtdStyle = 'color:' + getQtdTextColor(item.total) + '; font-weight: 800;';
       return [
         '<tr>',
         '<td>' + U.escapeHtml(item.label) + '</td>',
-        '<td class="t-right ' + getQtdColorClass(item.total) + '">' + U.formatNumber(item.total) + '</td>',
+        '<td class="t-right ' + getQtdColorClass(item.total) + '" style="' + qtdStyle + '">' + U.formatNumber(item.total) + '</td>',
         '<td class="t-right">' + formatDashboardPercent(percent) + '</td>',
         '</tr>'
       ].join("");
@@ -642,10 +647,11 @@
 
     const driverRows = summary.driverBreakdown.slice(0, 10).map(function (item) {
       const percent = totalExpedido ? (item.total / totalExpedido) * 100 : 0;
+      const qtdStyle = 'color:' + getQtdTextColor(item.total) + '; font-weight: 800;';
       return [
         '<tr>',
         '<td>' + U.escapeHtml(item.driver || "Não informado") + '</td>',
-        '<td class="t-right ' + getQtdColorClass(item.total) + '">' + U.formatNumber(item.total) + '</td>',
+        '<td class="t-right ' + getQtdColorClass(item.total) + '" style="' + qtdStyle + '">' + U.formatNumber(item.total) + '</td>',
         '<td class="t-right">' + formatDashboardPercent(percent) + '</td>',
         '</tr>'
       ].join("");
@@ -744,6 +750,7 @@
       renderTarget.style.pointerEvents = "none";
       renderTarget.style.opacity = "1";
       renderTarget.style.background = "#ffffff";
+      renderTarget.style.backgroundColor = "#ffffff";
       renderTarget.style.borderRadius = "18px";
       renderTarget.style.boxShadow = "none";
       renderTarget.style.padding = "0";
@@ -757,7 +764,7 @@
       (async function () {
         try {
           const canvas = await window.html2canvas(renderTarget, {
-            backgroundColor: null,
+            backgroundColor: "#ffffff",
             scale: 2,
             useCORS: true,
             width: fullWidth,
